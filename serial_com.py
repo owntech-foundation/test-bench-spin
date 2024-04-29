@@ -44,7 +44,7 @@ def serialCom():
 
             elif received_data == "C_TFP":
                 common.send("R_TFP_ACK")
-                tfp_ret = prog.firm_write("bootloader.bin") #("fast_blinky.bin")
+                tfp_ret = prog.firm_write("bootloader-v1.1.0.bin") #("fast_blinky.bin")
                 if (tfp_ret == 0):
                     common.send("R_TFP_SUC")
                 else:

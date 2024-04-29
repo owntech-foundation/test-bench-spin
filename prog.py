@@ -10,8 +10,8 @@ pe = lambda text : colored(text, "red")
 pw = lambda text : colored(text, "light_yellow")
 pb = lambda text : colored("0x" + text, "yellow", attrs=["bold"])
 
-factory_expected_ob = 0xf3eff8aa
-desired_ob = 0xF7EFF8AA #0xfbeff8aa <-- Nboot0 thinggy. Not required.
+factory_expected_ob = 0xffeff8aa
+desired_ob = 0xffeff8aa #0xfbeff8aa <-- Nboot0 thinggy. Not required.
 
 def execute_cmd_expected_return(cmd, expected_rtrn):
         print(cmd)
