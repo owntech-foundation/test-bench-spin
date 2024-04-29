@@ -3,6 +3,7 @@ import common
 import prog
 import serial
 import sys
+import os
 
 isFileOpen = False
 fp = None
@@ -14,14 +15,27 @@ def writeInLogFile(file, line):
         print("! FILE IS NOT OPEN")
         #abort test command ??
 
+def check_ping(hostname):
+    response = os.system("ping -c 3 " + hostname)
+    if response == 0:
+        return True
+    return False
+
 def serialCom():
     global fp, isFileOpen
     try:
         while True:
             received_data = common.ser.readline().decode('utf-8').strip()
-
+            
             if received_data == "C_PRP":
                 common.send("R_PRP")
+
+            elif received_data == "C_PIN":
+                pingInternet = check_ping(hostname = "owntech.org")
+                if pingInternet:
+                    common.send("R_PIN_SUC")
+                else:
+                    commom.send("R_PIN_TKO")
 
             elif received_data == "C_SLR":
                 print(f"Command received: {received_data}")
@@ -40,7 +54,7 @@ def serialCom():
                 if (ob_ret == 1):
                     common.send("R_OBP_SUC")
                 else:
-                    common.send("R_OBP_FAI")
+                    common.send("R_OBP_TKO")
 
             elif received_data == "C_TFP":
                 common.send("R_TFP_ACK")
@@ -48,7 +62,7 @@ def serialCom():
                 if (tfp_ret == 0):
                     common.send("R_TFP_SUC")
                 else:
-                    common.send("R_TFP_FAI")
+                    common.send("R_TFP_TKO")
 
             elif received_data == "C_SFP":
                 common.send("R_SFP_ACK")
@@ -57,7 +71,7 @@ def serialCom():
                 if (sfp_ret == 0):
                     common.send("R_SFP_SUC")
                 else:
-                    common.send("R_SFP_FAI")
+                    common.send("R_SFP_TKO")
 
             elif received_data == "C_SRP":
                 sd_ret = prog.shutdown()
