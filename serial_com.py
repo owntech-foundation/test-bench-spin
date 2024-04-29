@@ -46,6 +46,8 @@ def serialCom():
                     common.send("R_SLR_FND")
                 elif (rs_ret == 2):
                     common.send("R_SLR_FPM")
+                elif (rs_ret == 255):
+                    common.send("R_SLR_PNA")
 
             elif received_data == "C_OBP":
                 print(f"Command received: {received_data}")
