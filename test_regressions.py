@@ -45,14 +45,22 @@ class RegressionTests(unittest.TestCase):
     def test_controller_connection_announces_service_ready(self):
         controller = mock.Mock()
         with mock.patch.object(main.serial, "Serial", return_value=controller) as serial_port, \
-             mock.patch.object(main.common, "send") as send, \
              mock.patch.object(main.serial_com, "serialCom") as serial_com:
             main.connect_controller("/dev/ttyACM0")
 
         serial_port.assert_called_once_with(port="/dev/ttyACM0", baudrate=115200, timeout=1)
         self.assertIs(common.ser, controller)
-        send.assert_called_once_with("R_RDY")
-        serial_com.assert_called_once_with()
+        serial_com.assert_called_once_with(announce_ready=True)
+
+    def test_service_readiness_is_retried_until_acknowledged(self):
+        common.ser = FakeSerial([b"", b"C_RDY\r\n"])
+        with mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com.time, "monotonic", side_effect=[0, 1]), \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom(announce_ready=True)
+
+        self.assertEqual(send.call_args_list, [mock.call("R_RDY"), mock.call("R_RDY")])
 
     def test_stop_without_open_report_is_ignored(self):
         common.ser = FakeSerial([b"T_STP\r\n"])

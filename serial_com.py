@@ -5,6 +5,7 @@ import serial
 import sys
 import os
 import subprocess
+import time
 from status_store import status
 
 isFileOpen = False
@@ -38,15 +39,26 @@ def closeLogFile():
     fp = None
     isFileOpen = False
 
-def serialCom():
+def serialCom(announce_ready=False):
     global fp, isFileOpen
+    service_ready = not announce_ready
+    next_ready_announcement = 0
     try:
         while True:
+            if not service_ready:
+                now = time.monotonic()
+                if now >= next_ready_announcement:
+                    common.send("R_RDY")
+                    next_ready_announcement = now + 1
+
             received_data = common.ser.readline().decode('utf-8', errors='replace').strip()
             if received_data.startswith(("C_", "T_")):
                 status.record(received_data, "received")
             
-            if received_data == "C_PRP":
+            if received_data == "C_RDY":
+                service_ready = True
+
+            elif received_data == "C_PRP":
                 common.send("R_PRP")
 
             elif received_data == "C_PIN":

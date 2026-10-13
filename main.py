@@ -7,8 +7,7 @@ from web_server import start_server
 
 def connect_controller(device_port):
     common.ser = serial.Serial(port=device_port, baudrate=115200, timeout=1)
-    common.send("R_RDY")
-    serial_com.serialCom()
+    serial_com.serialCom(announce_ready=True)
 
 def main():
     while True:
