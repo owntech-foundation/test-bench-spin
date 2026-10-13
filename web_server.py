@@ -13,39 +13,39 @@ PAGE = r"""<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SPIN test bench</title>
   <style>
-    :root { color-scheme: dark; --bg:#0b1014; --panel:#141c22; --line:#26343e; --text:#eef5f7; --muted:#91a5ae; --cyan:#51d3d9; --green:#64df9b; --red:#ff7373; --amber:#ffc857; }
+    :root { color-scheme: dark; --bg:#101417; --panel:#171c20; --line:#343c42; --text:#e8ecee; --muted:#98a3a9; --cyan:#55c4ca; --green:#63c98c; --red:#e66f6f; }
     * { box-sizing:border-box; }
-    body { margin:0; background:radial-gradient(circle at top right,#17313a 0,transparent 34rem),var(--bg); color:var(--text); font:15px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif; }
-    main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:34px 0 56px; }
-    header { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:24px; }
-    .eyebrow { color:var(--cyan); font-size:12px; font-weight:800; letter-spacing:.16em; text-transform:uppercase; }
-    h1 { margin:4px 0 4px; font-size:clamp(30px,5vw,54px); letter-spacing:-.04em; line-height:1; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 ui-sans-serif,system-ui,-apple-system,sans-serif; }
+    main { width:min(1180px,calc(100% - 32px)); margin:0 auto; padding:28px 0 48px; }
+    header { display:flex; align-items:flex-end; justify-content:space-between; gap:24px; margin-bottom:20px; padding-bottom:18px; border-bottom:1px solid var(--line); }
+    .eyebrow { color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
+    h1 { margin:3px 0; font-size:clamp(28px,4vw,40px); letter-spacing:-.015em; line-height:1.1; }
     h2 { margin:0 0 16px; font-size:18px; }
     p { margin:0; color:var(--muted); }
     .live { display:flex; align-items:center; gap:8px; color:var(--muted); white-space:nowrap; }
-    .dot { width:9px; height:9px; border-radius:50%; background:var(--red); box-shadow:0 0 14px currentColor; }
+    .dot { width:9px; height:9px; border-radius:1px; background:var(--red); }
     .dot.ok { background:var(--green); }
     .grid { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(280px,.8fr); gap:18px; }
-    .panel { background:color-mix(in srgb,var(--panel) 94%,transparent); border:1px solid var(--line); border-radius:18px; padding:20px; box-shadow:0 18px 50px #0004; }
+    .panel { background:var(--panel); border:1px solid var(--line); border-radius:2px; padding:18px; }
     .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
-    .metric { min-height:106px; }
+    .metric { min-height:100px; }
     .label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
-    .value { margin-top:8px; font-size:22px; font-weight:800; overflow-wrap:anywhere; }
+    .value { margin-top:7px; font-size:20px; font-weight:700; overflow-wrap:anywhere; }
     .sub { margin-top:3px; color:var(--muted); font-size:13px; }
-    .badge { display:inline-flex; padding:4px 9px; border-radius:999px; background:#23313a; color:var(--muted); font-size:12px; font-weight:800; text-transform:uppercase; }
+    .badge { display:inline-flex; padding:3px 7px; border:1px solid var(--line); border-radius:2px; background:#20272c; color:var(--muted); font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }
     .badge.running,.badge.active { background:#17383c; color:var(--cyan); }
     .badge.passed,.badge.complete { background:#18372a; color:var(--green); }
     .badge.failed { background:#432326; color:var(--red); }
     .steps { display:grid; gap:8px; }
-    .step { display:grid; grid-template-columns:32px 1fr auto; gap:12px; align-items:center; padding:12px; border:1px solid var(--line); border-radius:12px; }
-    .step.active { border-color:var(--cyan); background:#173038; }
-    .step.failed { border-color:var(--red); background:#361f22; }
+    .step { display:grid; grid-template-columns:32px 1fr auto; gap:12px; align-items:center; padding:11px 12px; border:1px solid var(--line); border-radius:1px; }
+    .step.active { border-left:4px solid var(--cyan); background:#1a282c; }
+    .step.failed { border-left:4px solid var(--red); background:#2b2022; }
     .step.complete { opacity:.68; }
-    .step-number { width:30px; height:30px; display:grid; place-items:center; border-radius:50%; background:#223039; font-weight:800; }
+    .step-number { width:28px; height:28px; display:grid; place-items:center; border:1px solid var(--line); border-radius:1px; background:#20272c; font-weight:700; }
     .step-title { font-weight:750; }
     .step-description { color:var(--muted); font-size:13px; }
-    .progress { height:7px; margin-top:16px; border-radius:99px; overflow:hidden; background:#26343e; }
-    .progress > div { height:100%; width:0; background:linear-gradient(90deg,var(--cyan),var(--green)); transition:width .35s ease; }
+    .progress { height:6px; margin-top:16px; overflow:hidden; background:#293137; }
+    .progress > div { height:100%; width:0; background:var(--cyan); transition:width .25s ease; }
     ol { margin:0; padding-left:22px; }
     li { padding:0 0 12px 6px; color:var(--muted); }
     li::marker { color:var(--cyan); font-weight:800; }
@@ -53,8 +53,8 @@ PAGE = r"""<!doctype html>
     .event { display:grid; grid-template-columns:72px 68px 1fr; gap:8px; font:12px/1.4 ui-monospace,SFMono-Regular,monospace; }
     .event time,.direction { color:var(--muted); }
     .measurements { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
-    .measure { padding:6px 9px; border:1px solid var(--line); border-radius:8px; color:var(--cyan); font:13px ui-monospace,monospace; }
-    .error { display:none; margin-bottom:16px; padding:10px 14px; background:#432326; color:var(--red); border-radius:10px; }
+    .measure { padding:5px 8px; border:1px solid var(--line); border-radius:1px; color:var(--cyan); font:13px ui-monospace,monospace; }
+    .error { display:none; margin-bottom:16px; padding:10px 14px; border:1px solid var(--red); background:#2b2022; color:var(--red); }
     @media (max-width:800px) { .grid,.summary { grid-template-columns:1fr; } header { align-items:flex-end; } .event { grid-template-columns:64px 1fr; } .event .direction { display:none; } }
   </style>
 </head>
