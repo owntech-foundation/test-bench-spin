@@ -1,5 +1,6 @@
 import subprocess
 import re
+import shlex
 from termcolor import colored
 import common
 import time
@@ -15,13 +16,14 @@ desired_ob = 0xffeff8aa #0xfbeff8aa <-- Nboot0 thinggy. Not required.
 
 def execute_cmd_expected_return(cmd, expected_rtrn):
 	print(cmd)
-	#command = subprocess.check_output(cmd.split(" "))
-	command = subprocess.run(cmd.split(" "), capture_output=True)
-	#print(command)
-	#print(command.returncode)
-	#print(command.stdout)
-	#print(command.stderr)
-	out = command.stdout.decode("utf-8").rstrip("\n").replace("\r", "").split("\n") #bytes to string then remove the last empty element and cut
+	try:
+		command = subprocess.run(shlex.split(cmd), capture_output=True, text=True, check=False)
+	except OSError as error:
+		print(pe(f"Unable to execute command: {error}"))
+		return False, "", 255
+	out = command.stdout.rstrip("\n").replace("\r", "").split("\n")
+	if not command.stdout.strip() and command.stderr.strip():
+		out = command.stderr.rstrip("\n").replace("\r", "").split("\n")
 	print(out)
 	if (out[-1] == expected_rtrn):
 		return True, out[-1], command.returncode
@@ -80,7 +82,17 @@ def ob_procedure():
 def execute_cmd_prog(cmd):
 	# Start the subprocess and redirect its standard output and error to pipes
 	special_ret = 0
-	process = subprocess.Popen(cmd.split(" "), stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, text=True)
+	try:
+		process = subprocess.Popen(
+			shlex.split(cmd),
+			stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT,
+			text=True,
+			bufsize=1,
+		)
+	except OSError as error:
+		print(pe(f"Unable to execute command: {error}"))
+		return 255
 	patternFirmWrite = re.compile(r'(\d+)/\s(\d+)\s+pages written')
 	patternBootloader = re.compile(r"(\d+\.?\d*) (\w+B|B) \/ (\d+\.?\d*) (\w+B|B) (?:\[.*?\]|).*?(\d+\.?\d*)%(?: (\d+\.?\d*) ((?:\w+B|B)\/s)|)")
 	patternResetStlinkSuc = re.compile(r'.*?ok')
@@ -88,17 +100,13 @@ def execute_cmd_prog(cmd):
 	patternResetStlinkFaiNoDev = re.compile(r'No such device found')
 
 	# Read output and error in real-time
-	while True:
-		output_line = process.stdout.readline()
-		# error_line = process.stderr.readline()
-		if not output_line: # and not error_line:
-			break
+	for output_line in process.stdout:
 		
 		matchFirmWrite = patternFirmWrite.search(output_line)
 		matchBootloader = patternBootloader.search(output_line)
 		# matchResetStlinkSuc = patternResetStlinkSuc.search(output_line)
 		matchResetStlinkFaiPerm = patternResetStlinkFaiPerm.search(output_line)
-		# matchResetStlinkFaiNoDev = patternResetStlinkFaiNoDev.search(error_line)
+		matchResetStlinkFaiNoDev = patternResetStlinkFaiNoDev.search(output_line)
 
 		# if output_line != "\n":
 		#         print(ascii(output_line))
@@ -106,19 +114,21 @@ def execute_cmd_prog(cmd):
 		#         print("2>" + ascii(error_line))
 
 		if matchFirmWrite:
-			common.send("U_TFP_PER " + str((int(matchFirmWrite.group(1))*100)//(int(matchFirmWrite.group(2)) - 1)), True)
+			written = int(matchFirmWrite.group(1))
+			total = int(matchFirmWrite.group(2))
+			if total > 0:
+				common.send("U_TFP_PER " + str(min(100, (written * 100) // total)), True)
 		elif matchBootloader:
 			common.send("U_SFP_PER " + str(int(float(matchBootloader.group(5)))), True)
 		# elif matchResetStlinkSuc:
 		#         common.send("R_SLR_SUC")
 		elif matchResetStlinkFaiPerm:
 			special_ret = 2 #R_SLR_FPM
-		# elif matchResetStlinkFaiNoDev:
-		#         pass
-			# common.send("R_SLR_FND")
+		elif matchResetStlinkFaiNoDev:
+			special_ret = 1 #R_SLR_FND
 	process.wait()
 	time.sleep(1)
-	return process.returncode + special_ret
+	return special_ret if special_ret else process.returncode
 
 def firm_write(bin_path, addr=0x08000000):
 	ret = execute_cmd_prog("st-flash --reset write " + bin_path + " " + str(hex(addr)))

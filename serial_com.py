@@ -4,28 +4,44 @@ import prog
 import serial
 import sys
 import os
+import subprocess
 
 isFileOpen = False
 fp = None
 
 def writeInLogFile(file, line):
-    if (isFileOpen == True):
+    if isFileOpen and file is not None:
         file.write(line + "\n")
+        file.flush()
     else:
         print("! FILE IS NOT OPEN")
         #abort test command ??
 
 def check_ping(hostname):
-    response = os.system("ping -c 3 " + hostname)
-    if response == 0:
-        return True
-    return False
+    try:
+        response = subprocess.run(
+            ["ping", "-c", "3", hostname],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            check=False,
+        )
+        return response.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+def closeLogFile():
+    global fp, isFileOpen
+    if fp is not None and not fp.closed:
+        fp.close()
+    fp = None
+    isFileOpen = False
 
 def serialCom():
     global fp, isFileOpen
     try:
         while True:
-            received_data = common.ser.readline().decode('utf-8').strip()
+            received_data = common.ser.readline().decode('utf-8', errors='replace').strip()
             
             if received_data == "C_PRP":
                 common.send("R_PRP")
@@ -35,7 +51,7 @@ def serialCom():
                 if pingInternet:
                     common.send("R_PIN_SUC")
                 else:
-                    commom.send("R_PIN_TKO")
+                    common.send("R_PIN_TKO")
 
             elif received_data == "C_SLR":
                 print(f"Command received: {received_data}")
@@ -85,25 +101,30 @@ def serialCom():
 
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
+                    closeLogFile()
                     now = datetime.datetime.now()
+                    os.makedirs('test_reports', exist_ok=True)
                     fp = open('test_reports/SPIN-TEST_' + str(now.isoformat()) + '.txt', 'w')
                     isFileOpen = True
                     writeInLogFile(fp, str(now))
                     writeInLogFile(fp, received_data)
                 elif(received_data == "T_STP"):
-                    writeInLogFile(fp, received_data)
-                    fp.close()
-                    isFileOpen = False
+                    if isFileOpen:
+                        writeInLogFile(fp, received_data)
+                        closeLogFile()
+                    else:
+                        print("Ignoring T_STP: no test report is open")
                 else:
                     writeInLogFile(fp, received_data)
             else:
                 print(f"received: `{received_data}`")
 
     except KeyboardInterrupt:
-        common.ser.close()
         print("Program terminated.")
         sys.exit(0)
     except serial.SerialException as e: #device disconnected
-        common.ser.close()
+        print(f"Serial connection lost: {e}")
     finally:
-        common.ser.close()  # Close the serial port when done
+        closeLogFile()
+        if common.ser is not None and common.ser.is_open:
+            common.ser.close()  # Close the serial port when done

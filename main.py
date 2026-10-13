@@ -16,10 +16,14 @@ def main():
             # while find_device() is not None:
             #     print ("stuff")
             #     time.sleep(1)
-            common.ser = serial.Serial(port=common.device_port, baudrate=115200, timeout=1)
-            serial_com.serialCom()
+            try:
+                common.ser = serial.Serial(port=common.device_port, baudrate=115200, timeout=1)
+                serial_com.serialCom()
+            except serial.SerialException as error:
+                print(f"Unable to open {common.device_port}: {error}")
             print("Device disconnected, searching for a new device.")
         
         time.sleep(1)
 
-main()
+if __name__ == "__main__":
+    main()
