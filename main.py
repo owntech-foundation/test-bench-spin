@@ -5,6 +5,11 @@ import serial
 from status_store import status
 from web_server import start_server
 
+def connect_controller(device_port):
+    common.ser = serial.Serial(port=device_port, baudrate=115200, timeout=1)
+    common.send("R_RDY")
+    serial_com.serialCom()
+
 def main():
     while True:
         common.device_port = common.find_device(0x2fe3, 0x0101)
@@ -20,8 +25,7 @@ def main():
             #     print ("stuff")
             #     time.sleep(1)
             try:
-                common.ser = serial.Serial(port=common.device_port, baudrate=115200, timeout=1)
-                serial_com.serialCom()
+                connect_controller(common.device_port)
             except serial.SerialException as error:
                 print(f"Unable to open {common.device_port}: {error}")
             status.set_controller(None)

@@ -6,6 +6,7 @@ import urllib.request
 from unittest import mock
 
 import common
+import main
 import prog
 import serial_com
 from status_store import TestStatus
@@ -40,6 +41,18 @@ class RegressionTests(unittest.TestCase):
              self.assertRaises(SystemExit):
             serial_com.serialCom()
         send.assert_called_once_with("R_PIN_TKO")
+
+    def test_controller_connection_announces_service_ready(self):
+        controller = mock.Mock()
+        with mock.patch.object(main.serial, "Serial", return_value=controller) as serial_port, \
+             mock.patch.object(main.common, "send") as send, \
+             mock.patch.object(main.serial_com, "serialCom") as serial_com:
+            main.connect_controller("/dev/ttyACM0")
+
+        serial_port.assert_called_once_with(port="/dev/ttyACM0", baudrate=115200, timeout=1)
+        self.assertIs(common.ser, controller)
+        send.assert_called_once_with("R_RDY")
+        serial_com.assert_called_once_with()
 
     def test_stop_without_open_report_is_ignored(self):
         common.ser = FakeSerial([b"T_STP\r\n"])
