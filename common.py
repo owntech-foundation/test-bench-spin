@@ -1,5 +1,6 @@
 import serial
 from serial.tools import list_ports
+from status_store import status
 
 device_port = None
 ser = None
@@ -12,6 +13,7 @@ def send(response, noRepeat=False):
         return
     last_send = response
     print("sending: " + response)
+    status.record(response, "sent")
     response = response + "\r\n"
     ser.write(response.encode('utf-8'))
 

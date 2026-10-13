@@ -2,6 +2,8 @@ import common
 import serial_com
 import time
 import serial
+from status_store import status
+from web_server import start_server
 
 def main():
     while True:
@@ -9,6 +11,7 @@ def main():
 
         if common.device_port is not None:
             print(f"Device found on {common.device_port}")
+            status.set_controller(common.device_port)
             # Do stuff with the connected device
             # Add your custom logic here
 
@@ -21,9 +24,11 @@ def main():
                 serial_com.serialCom()
             except serial.SerialException as error:
                 print(f"Unable to open {common.device_port}: {error}")
+            status.set_controller(None)
             print("Device disconnected, searching for a new device.")
         
         time.sleep(1)
 
 if __name__ == "__main__":
+    start_server()
     main()

@@ -5,6 +5,7 @@ import serial
 import sys
 import os
 import subprocess
+from status_store import status
 
 isFileOpen = False
 fp = None
@@ -42,6 +43,8 @@ def serialCom():
     try:
         while True:
             received_data = common.ser.readline().decode('utf-8', errors='replace').strip()
+            if received_data.startswith(("C_", "T_")):
+                status.record(received_data, "received")
             
             if received_data == "C_PRP":
                 common.send("R_PRP")

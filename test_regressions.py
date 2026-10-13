@@ -1,10 +1,15 @@
 import types
 import unittest
+import json
+import http.client
+import urllib.request
 from unittest import mock
 
 import common
 import prog
 import serial_com
+from status_store import TestStatus
+from web_server import start_server
 
 
 class FakeSerial:
@@ -53,6 +58,32 @@ class RegressionTests(unittest.TestCase):
         )
         popen.return_value = process
         self.assertEqual(prog.execute_cmd_prog("usbreset 0483:374f"), 1)
+
+    def test_status_tracks_a_successful_sequence(self):
+        test_status = TestStatus()
+        test_status.set_controller("/dev/ttyACM0")
+        for message in ("T_STR", "C_PRP", "C_PIN", "C_SLR", "T_SHC_SUC", "T_CU1 12.3", "T_LDO 3.3", "T_OBP_SUC", "T_TFP_SUC", "T_CU2 36.5", "T_SFP_SUC", "T_STP"):
+            test_status.record(message)
+        snapshot = test_status.snapshot()
+        self.assertEqual(snapshot["test"]["state"], "passed")
+        self.assertEqual(snapshot["measurements"]["T_LDO"], "3.3 V")
+        self.assertTrue(snapshot["controller"]["connected"])
+
+    def test_web_status_endpoint(self):
+        server = start_server("127.0.0.1", 0)
+        self.assertIsNotNone(server)
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{server.server_port}/api/status") as response:
+                payload = json.load(response)
+            self.assertEqual(payload["service"]["state"], "running")
+            self.assertEqual(len(payload["operator_steps"]), 7)
+            connection = http.client.HTTPConnection("127.0.0.1", server.server_port)
+            connection.request("HEAD", "/")
+            self.assertEqual(connection.getresponse().status, 200)
+            connection.close()
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 if __name__ == "__main__":
