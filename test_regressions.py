@@ -56,7 +56,11 @@ class RegressionTests(unittest.TestCase):
              self.assertRaises(SystemExit):
             serial_com.serialCom()
 
-        self.assertEqual(send.call_args_list, [mock.call("R_TFP_ACK"), mock.call("R_TFP_TKO")])
+        self.assertEqual(send.call_args_list, [
+            mock.call("R_TFP_ACK"),
+            mock.call("R_TFP_TKO"),
+            mock.call("R_STP"),
+        ])
 
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])

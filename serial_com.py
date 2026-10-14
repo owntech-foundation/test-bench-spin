@@ -110,6 +110,10 @@ def serialCom(announce_ready=False):
                     common.send("R_TFP_SUC")
                 else:
                     common.send("R_TFP_TKO")
+                    # Do not leave the tester waiting in the failure-choice
+                    # state, where a button press could start the next step
+                    # with an unprogrammed DUT. Force a graceful stop.
+                    common.send("R_STP")
 
             elif received_data == "C_SFP":
                 common.send("R_SFP_ACK")
