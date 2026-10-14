@@ -5,11 +5,49 @@ import serial
 import sys
 import os
 import subprocess
+import threading
 import time
 from status_store import status
 
 isFileOpen = False
 fp = None
+_sfp_thread = None
+_sfp_abort_requested = threading.Event()
+_sfp_lock = threading.Lock()
+
+def _sample_upload_worker():
+    global _sfp_thread
+    try:
+        try:
+            sfp_ret = prog.bootloader_write()
+        except Exception as error:
+            print(f"Sample firmware upload failed: {error}")
+            sfp_ret = 255
+
+        if not _sfp_abort_requested.is_set():
+            common.send("R_SFP_SUC" if sfp_ret == 0 else "R_SFP_TKO")
+    finally:
+        with _sfp_lock:
+            _sfp_thread = None
+
+def start_sample_upload():
+    global _sfp_thread
+    with _sfp_lock:
+        if _sfp_thread is not None and _sfp_thread.is_alive():
+            return False
+        _sfp_abort_requested.clear()
+        _sfp_thread = threading.Thread(target=_sample_upload_worker, daemon=True)
+        _sfp_thread.start()
+        return True
+
+def abort_sample_upload():
+    _sfp_abort_requested.set()
+    abort_ret = prog.abort_active_upload()
+    with _sfp_lock:
+        worker = _sfp_thread
+    if worker is not None and worker is not threading.current_thread():
+        worker.join(timeout=4)
+    return abort_ret
 
 def writeInLogFile(file, line):
     if isFileOpen and file is not None:
@@ -117,19 +155,11 @@ def serialCom(announce_ready=False):
 
             elif received_data == "C_SFP":
                 common.send("R_SFP_ACK")
-                try:
-                    sfp_ret = prog.bootloader_write()
-                except Exception as error:
-                    print(f"Sample firmware upload failed: {error}")
-                    sfp_ret = 255
-
-                if (sfp_ret == 0):
-                    common.send("R_SFP_SUC")
-                else:
+                if not start_sample_upload():
                     common.send("R_SFP_TKO")
 
             elif received_data == "C_SFP_ABORT":
-                abort_ret = prog.abort_active_upload()
+                abort_ret = abort_sample_upload()
                 common.send("R_SFP_ABORT_ACK" if abort_ret == 0 else "R_SFP_ABORT_TKO")
 
             elif received_data == "C_SRP":

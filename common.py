@@ -11,6 +11,7 @@ _reset_requested = False
 _reset_lock = threading.Lock()
 _command_queue = []
 _command_lock = threading.Lock()
+_send_lock = threading.Lock()
 SERIAL_BYTE_DELAY = 0.002
 
 def request_controller_command(command):
@@ -47,17 +48,17 @@ def consume_controller_reset():
 
 def send(response, noRepeat=False):
     global last_send
-
-    if (noRepeat==True and response == last_send):
-        return
-    last_send = response
-    print("sending: " + response)
-    status.record(response, "sent")
-    # The controller's USB console has a small receive buffer. Long commands
-    # can otherwise be truncated and joined to the following command.
-    for byte in (response + "\r\n").encode("utf-8"):
-        ser.write(bytes((byte,)))
-        time.sleep(SERIAL_BYTE_DELAY)
+    with _send_lock:
+        if (noRepeat==True and response == last_send):
+            return
+        last_send = response
+        print("sending: " + response)
+        status.record(response, "sent")
+        # The controller's USB console has a small receive buffer. Long commands
+        # can otherwise be truncated and joined to the following command.
+        for byte in (response + "\r\n").encode("utf-8"):
+            ser.write(bytes((byte,)))
+            time.sleep(SERIAL_BYTE_DELAY)
 
 def find_device(target_vid, target_pid, name=None):
     for port in list_ports.comports():

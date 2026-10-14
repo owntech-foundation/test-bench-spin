@@ -1,5 +1,6 @@
 import types
 import unittest
+import threading
 import json
 import http.client
 import urllib.request
@@ -31,6 +32,7 @@ class FakeSerial:
 class RegressionTests(unittest.TestCase):
     def tearDown(self):
         serial_com.closeLogFile()
+        serial_com._sfp_abort_requested.set()
         common.ser = None
 
     def test_send_paces_serial_bytes(self):
@@ -64,12 +66,36 @@ class RegressionTests(unittest.TestCase):
 
     def test_sample_upload_abort_is_acknowledged(self):
         common.ser = FakeSerial([b"C_SFP_ABORT\r\n"])
-        with mock.patch.object(prog, "abort_active_upload", return_value=0), \
+        with mock.patch.object(serial_com, "abort_sample_upload", return_value=0), \
              mock.patch.object(serial_com.common, "send") as send, \
              mock.patch.object(serial_com, "print"), \
              self.assertRaises(SystemExit):
             serial_com.serialCom()
         send.assert_called_once_with("R_SFP_ABORT_ACK")
+
+    def test_sample_upload_runs_without_blocking_serial_commands(self):
+        common.ser = FakeSerial([b"C_SFP\r\n", b"C_SFP_ABORT\r\n"])
+        release_upload = threading.Event()
+
+        def upload():
+            release_upload.wait(1)
+            return 124
+
+        def abort():
+            release_upload.set()
+            return 0
+
+        with mock.patch.object(prog, "bootloader_write", side_effect=upload), \
+             mock.patch.object(prog, "abort_active_upload", side_effect=abort), \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        self.assertEqual(send.call_args_list, [
+            mock.call("R_SFP_ACK"),
+            mock.call("R_SFP_ABORT_ACK"),
+        ])
 
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
