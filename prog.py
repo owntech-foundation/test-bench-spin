@@ -8,6 +8,9 @@ from termcolor import colored
 import common
 import time
 
+_active_process = None
+_active_process_lock = threading.Lock()
+
 h = lambda hex_in : str(hex(hex_in)).strip("0x")
 ps = lambda text : colored(text, "green")
 pe = lambda text : colored(text, "red")
@@ -83,6 +86,7 @@ def ob_procedure():
 	return (1)
 
 def execute_cmd_prog(cmd, timeout_seconds=120):
+	global _active_process
 	# Start the subprocess and redirect its standard output and error to pipes
 	special_ret = 0
 	try:
@@ -94,6 +98,8 @@ def execute_cmd_prog(cmd, timeout_seconds=120):
 			bufsize=1,
 			start_new_session=True,
 		)
+		with _active_process_lock:
+			_active_process = process
 	except OSError as error:
 		print(pe(f"Unable to execute command: {error}"))
 		return 255
@@ -161,10 +167,34 @@ def execute_cmd_prog(cmd, timeout_seconds=120):
 			special_ret = 1 #R_SLR_FND
 	watchdog.cancel()
 	process.wait()
+	with _active_process_lock:
+		if _active_process is process:
+			_active_process = None
 	time.sleep(1)
 	if timed_out:
 		return 124
 	return special_ret if special_ret else process.returncode
+
+def abort_active_upload():
+	"""Terminate the currently running programmer command, if any."""
+	with _active_process_lock:
+		process = _active_process
+	if process is None or process.poll() is not None:
+		return 0
+	try:
+		os.killpg(process.pid, signal.SIGTERM)
+		process.wait(timeout=3)
+	except subprocess.TimeoutExpired:
+		try:
+			os.killpg(process.pid, signal.SIGKILL)
+		except (OSError, ProcessLookupError):
+			process.kill()
+	except (OSError, ProcessLookupError):
+		try:
+			process.terminate()
+		except OSError:
+			return 255
+	return 0
 
 def firm_write(bin_path, addr=0x08000000):
 	ret = execute_cmd_prog("st-flash --reset write " + bin_path + " " + str(hex(addr)))

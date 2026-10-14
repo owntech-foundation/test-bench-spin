@@ -128,6 +128,10 @@ def serialCom(announce_ready=False):
                 else:
                     common.send("R_SFP_TKO")
 
+            elif received_data == "C_SFP_ABORT":
+                abort_ret = prog.abort_active_upload()
+                common.send("R_SFP_ABORT_ACK" if abort_ret == 0 else "R_SFP_ABORT_TKO")
+
             elif received_data == "C_SRP":
                 sd_ret = prog.shutdown()
                 print("shutdown" + str(sd_ret))

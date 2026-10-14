@@ -62,6 +62,15 @@ class RegressionTests(unittest.TestCase):
             mock.call("R_STP"),
         ])
 
+    def test_sample_upload_abort_is_acknowledged(self):
+        common.ser = FakeSerial([b"C_SFP_ABORT\r\n"])
+        with mock.patch.object(prog, "abort_active_upload", return_value=0), \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+        send.assert_called_once_with("R_SFP_ABORT_ACK")
+
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
         with mock.patch.object(serial_com, "check_ping", return_value=False), \
