@@ -57,6 +57,25 @@ def writeInLogFile(file, line):
         print("! FILE IS NOT OPEN")
         #abort test command ??
 
+def setLogFileUid(file, stm32_uid):
+    """Replace the report's first line while preserving all test events."""
+    if not isFileOpen or file is None:
+        print("! FILE IS NOT OPEN")
+        return
+    file.flush()
+    file.seek(0)
+    report_lines = file.readlines()
+    uid_line = "STM32_UID " + (stm32_uid or "UNAVAILABLE") + "\n"
+    if report_lines and report_lines[0].startswith("STM32_UID "):
+        report_lines[0] = uid_line
+    else:
+        report_lines.insert(0, uid_line)
+    file.seek(0)
+    file.truncate()
+    file.writelines(report_lines)
+    file.flush()
+    file.seek(0, os.SEEK_END)
+
 def check_ping(hostname):
     try:
         response = subprocess.run(
@@ -131,6 +150,7 @@ def serialCom(announce_ready=False):
             elif received_data == "C_OBP":
                 print(f"Command received: {received_data}")
                 common.send("R_OBP_ACK")
+                setLogFileUid(fp, prog.read_stm32_uid())
                 ob_ret = prog.ob_procedure()
                 if (ob_ret == 1):
                     common.send("R_OBP_SUC")
@@ -176,8 +196,9 @@ def serialCom(announce_ready=False):
                     closeLogFile()
                     now = datetime.datetime.now()
                     os.makedirs('test_reports', exist_ok=True)
-                    fp = open('test_reports/SPIN-TEST_' + str(now.isoformat()) + '.txt', 'w')
+                    fp = open('test_reports/SPIN-TEST_' + str(now.isoformat()) + '.txt', 'w+')
                     isFileOpen = True
+                    writeInLogFile(fp, "STM32_UID UNAVAILABLE")
                     writeInLogFile(fp, str(now))
                     writeInLogFile(fp, received_data)
                 elif(received_data == "T_STP"):

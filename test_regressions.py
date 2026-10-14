@@ -3,6 +3,8 @@ import unittest
 import threading
 import json
 import http.client
+import struct
+import tempfile
 import urllib.request
 from unittest import mock
 
@@ -143,6 +145,50 @@ class RegressionTests(unittest.TestCase):
         )
         popen.return_value = process
         self.assertEqual(prog.execute_cmd_prog("usbreset 0483:374f"), 1)
+
+    def test_stm32_uid_is_formatted_from_three_device_words(self):
+        uid_bytes = struct.pack("<III", 0x12345678, 0x90ABCDEF, 0x10203040)
+
+        def write_uid(command, **_kwargs):
+            with open(command[2], "wb") as uid_file:
+                uid_file.write(uid_bytes)
+            return types.SimpleNamespace(returncode=0)
+
+        with mock.patch.object(prog.subprocess, "run", side_effect=write_uid):
+            self.assertEqual(prog.read_stm32_uid(), "1234567890ABCDEF10203040")
+
+    def test_stm32_uid_read_failure_returns_none(self):
+        result = types.SimpleNamespace(returncode=1)
+        with mock.patch.object(prog.subprocess, "run", return_value=result), \
+             mock.patch.object(prog, "print"):
+            self.assertIsNone(prog.read_stm32_uid())
+
+    def test_stm32_uid_replaces_first_report_line(self):
+        serial_com.isFileOpen = True
+        with tempfile.TemporaryFile(mode="w+") as report_file:
+            report_file.write("STM32_UID UNAVAILABLE\n2026-10-14 12:00:00\nT_STR\n")
+            serial_com.setLogFileUid(report_file, "1234567890ABCDEF10203040")
+            report_file.seek(0)
+            self.assertEqual(
+                report_file.read(),
+                "STM32_UID 1234567890ABCDEF10203040\n2026-10-14 12:00:00\nT_STR\n",
+            )
+
+    def test_option_byte_step_reads_uid_while_dut_is_powered(self):
+        common.ser = FakeSerial([b"C_OBP\r\n"])
+        serial_com.isFileOpen = True
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040") as read_uid, \
+             mock.patch.object(serial_com, "setLogFileUid") as set_uid, \
+             mock.patch.object(serial_com.prog, "ob_procedure", return_value=1), \
+             mock.patch.object(serial_com.common, "send"), \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        read_uid.assert_called_once_with()
+        set_uid.assert_called_once_with(report_file, "1234567890ABCDEF10203040")
 
     def test_test_firmware_erases_existing_application_before_write(self):
         with mock.patch.object(prog, "execute_cmd_prog", side_effect=[0, 0]) as execute:

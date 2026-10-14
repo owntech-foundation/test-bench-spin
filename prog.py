@@ -3,6 +3,8 @@ import re
 import shlex
 import os
 import signal
+import struct
+import tempfile
 import threading
 from termcolor import colored
 import common
@@ -19,6 +21,45 @@ pb = lambda text : colored("0x" + text, "yellow", attrs=["bold"])
 
 factory_expected_ob = 0xffeff8aa
 desired_ob = 0xffeff8aa #0xfbeff8aa <-- Nboot0 thinggy. Not required.
+
+STM32_UID_ADDRESS = 0x1FFF7590
+STM32_UID_SIZE = 12
+
+def read_stm32_uid():
+	"""Read the DUT's factory-programmed 96-bit identifier through ST-LINK."""
+	fd, uid_path = tempfile.mkstemp(prefix="spin-uid-", suffix=".bin")
+	os.close(fd)
+	try:
+		try:
+			result = subprocess.run(
+				["st-flash", "read", uid_path, hex(STM32_UID_ADDRESS), str(STM32_UID_SIZE)],
+				stdout=subprocess.PIPE,
+				stderr=subprocess.STDOUT,
+				text=True,
+				timeout=15,
+				check=False,
+			)
+		except (OSError, subprocess.TimeoutExpired) as error:
+			print(pe(f"Unable to read STM32 UID: {error}"))
+			return None
+
+		if result.returncode != 0:
+			print(pe(f"Unable to read STM32 UID: st-flash returned {result.returncode}"))
+			return None
+
+		with open(uid_path, "rb") as uid_file:
+			uid_bytes = uid_file.read()
+		if len(uid_bytes) != STM32_UID_SIZE or uid_bytes in (b"\x00" * STM32_UID_SIZE, b"\xff" * STM32_UID_SIZE):
+			print(pe("Unable to read STM32 UID: invalid UID data"))
+			return None
+
+		uid_words = struct.unpack("<III", uid_bytes)
+		return "".join(f"{word:08X}" for word in uid_words)
+	finally:
+		try:
+			os.unlink(uid_path)
+		except FileNotFoundError:
+			pass
 
 def execute_cmd_expected_return(cmd, expected_rtrn):
 	print(cmd)
