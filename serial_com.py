@@ -101,7 +101,11 @@ def serialCom(announce_ready=False):
 
             elif received_data == "C_TFP":
                 common.send("R_TFP_ACK")
-                tfp_ret = prog.firm_write("bootloader-v1.1.0.bin") #("fast_blinky.bin")
+                try:
+                    tfp_ret = prog.firm_write("bootloader-v1.1.0.bin") #("fast_blinky.bin")
+                except Exception as error:
+                    print(f"Test firmware upload failed: {error}")
+                    tfp_ret = 255
                 if (tfp_ret == 0):
                     common.send("R_TFP_SUC")
                 else:
@@ -109,7 +113,11 @@ def serialCom(announce_ready=False):
 
             elif received_data == "C_SFP":
                 common.send("R_SFP_ACK")
-                sfp_ret = prog.bootloader_write()
+                try:
+                    sfp_ret = prog.bootloader_write()
+                except Exception as error:
+                    print(f"Sample firmware upload failed: {error}")
+                    sfp_ret = 255
 
                 if (sfp_ret == 0):
                     common.send("R_SFP_SUC")

@@ -1,6 +1,9 @@
 import subprocess
 import re
 import shlex
+import os
+import signal
+import threading
 from termcolor import colored
 import common
 import time
@@ -79,7 +82,7 @@ def ob_procedure():
 		return (-1)
 	return (1)
 
-def execute_cmd_prog(cmd):
+def execute_cmd_prog(cmd, timeout_seconds=120):
 	# Start the subprocess and redirect its standard output and error to pipes
 	special_ret = 0
 	try:
@@ -89,6 +92,7 @@ def execute_cmd_prog(cmd):
 			stderr=subprocess.STDOUT,
 			text=True,
 			bufsize=1,
+			start_new_session=True,
 		)
 	except OSError as error:
 		print(pe(f"Unable to execute command: {error}"))
@@ -99,6 +103,35 @@ def execute_cmd_prog(cmd):
 	patternResetStlinkFaiPerm = re.compile(r'.*?\[Permission denied\]')
 	patternResetStlinkFaiNoDev = re.compile(r'No such device found')
 
+	timed_out = False
+
+	def stop_stuck_process():
+		nonlocal timed_out
+		if process.poll() is not None:
+			return
+		timed_out = True
+		print(pe(f"Command timed out after {timeout_seconds}s; terminating process group"))
+		try:
+			os.killpg(process.pid, signal.SIGTERM)
+		except (OSError, ProcessLookupError):
+			try:
+				process.terminate()
+			except OSError:
+				return
+		try:
+			process.wait(timeout=3)
+		except subprocess.TimeoutExpired:
+			try:
+				os.killpg(process.pid, signal.SIGKILL)
+			except (OSError, ProcessLookupError):
+				try:
+					process.kill()
+				except OSError:
+					pass
+
+	watchdog = threading.Timer(timeout_seconds, stop_stuck_process)
+	watchdog.daemon = True
+	watchdog.start()
 	# Read output and error in real-time
 	for output_line in process.stdout:
 		
@@ -126,8 +159,11 @@ def execute_cmd_prog(cmd):
 			special_ret = 2 #R_SLR_FPM
 		elif matchResetStlinkFaiNoDev:
 			special_ret = 1 #R_SLR_FND
+	watchdog.cancel()
 	process.wait()
 	time.sleep(1)
+	if timed_out:
+		return 124
 	return special_ret if special_ret else process.returncode
 
 def firm_write(bin_path, addr=0x08000000):
@@ -146,7 +182,7 @@ def search_for_device(vid, pid, name):
 		print("> Device disconnected, searching for a new device.")
 		
 def bootloader_write():
-	ret = execute_cmd_prog("./mcumgr-rpi --conntype=serial --connstring=dev=/dev/ttyACM2,baud=115200,mtu=128 image upload -e blank-firmware-bootloader.bin")
+	ret = execute_cmd_prog("./mcumgr-rpi --conntype=serial --connstring=dev=/dev/ttyACM2,baud=115200,mtu=128 image upload -e blank-firmware-bootloader.bin", timeout_seconds=120)
 	# print("ret" + str(ret))
 	return (ret)
 

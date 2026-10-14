@@ -48,6 +48,16 @@ class RegressionTests(unittest.TestCase):
         common.clear_controller_commands()
         self.assertIsNone(common.consume_controller_command())
 
+    def test_firmware_upload_exception_returns_failure_response(self):
+        common.ser = FakeSerial([b"C_TFP\r\n"])
+        with mock.patch.object(prog, "firm_write", side_effect=RuntimeError("upload failed")), \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        self.assertEqual(send.call_args_list, [mock.call("R_TFP_ACK"), mock.call("R_TFP_TKO")])
+
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
         with mock.patch.object(serial_com, "check_ping", return_value=False), \
