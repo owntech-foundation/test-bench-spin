@@ -109,6 +109,30 @@ class RegressionTests(unittest.TestCase):
             serial_com.serialCom()
         send.assert_called_once_with("R_PIN_TKO")
 
+    def test_api_step_provisions_identity_before_hardware_tests(self):
+        common.ser = FakeSerial([b"C_PIN\r\n"])
+        serial_com.isFileOpen = True
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com, "connect_production_api", return_value=True), \
+             mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040"), \
+             mock.patch.object(serial_com, "provision_dut_serial", return_value="SPN1234567890"), \
+             mock.patch.object(serial_com, "setLogFileUid") as set_uid, \
+             mock.patch.object(serial_com, "setLogFileSerial") as set_serial, \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com.time, "sleep"), \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        self.assertEqual(send.call_args_list, [
+            mock.call("R_RLY_DUT_ON"),
+            mock.call("R_RLY_DUT_OFF"),
+            mock.call("R_PIN_SUC"),
+        ])
+        set_uid.assert_called_once_with(report_file, "1234567890ABCDEF10203040")
+        set_serial.assert_called_once_with(report_file, "SPN1234567890")
+
     def test_controller_connection_announces_service_ready(self):
         controller = mock.Mock()
         with mock.patch.object(main.serial, "Serial", return_value=controller) as serial_port, \
@@ -176,24 +200,18 @@ class RegressionTests(unittest.TestCase):
                 "STM32_UID 1234567890ABCDEF10203040\nSERIAL SPN1234567890\n2026-10-14 12:00:00\nT_STR\n",
             )
 
-    def test_option_byte_step_reads_uid_while_dut_is_powered(self):
+    def test_option_byte_step_runs_after_identity_provisioning(self):
         common.ser = FakeSerial([b"C_OBP\r\n"])
         serial_com.isFileOpen = True
         report_file = mock.MagicMock()
         serial_com.fp = report_file
-        with mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040") as read_uid, \
-             mock.patch.object(serial_com, "provision_dut_serial", return_value="SPN1234567890"), \
-             mock.patch.object(serial_com, "setLogFileUid") as set_uid, \
-             mock.patch.object(serial_com, "setLogFileSerial") as set_serial, \
-             mock.patch.object(serial_com.prog, "ob_procedure", return_value=1), \
+        with mock.patch.object(serial_com.prog, "ob_procedure", return_value=1) as ob_procedure, \
              mock.patch.object(serial_com.common, "send"), \
              mock.patch.object(serial_com, "print"), \
              self.assertRaises(SystemExit):
             serial_com.serialCom()
 
-        read_uid.assert_called_once_with()
-        set_uid.assert_called_once_with(report_file, "1234567890ABCDEF10203040")
-        set_serial.assert_called_once_with(report_file, "SPN1234567890")
+        ob_procedure.assert_called_once_with()
 
     def test_otp_serial_record_round_trip(self):
         serial = "SPN1234567890"

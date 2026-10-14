@@ -175,7 +175,22 @@ def serialCom(announce_ready=False):
                 common.send("R_PRP")
 
             elif received_data == "C_PIN":
+                identity_ready = False
                 if connect_production_api():
+                    common.send("R_RLY_DUT_ON")
+                    time.sleep(0.5)
+                    try:
+                        setLogFileUid(fp, prog.read_stm32_uid())
+                        assigned_serial = provision_dut_serial()
+                        setLogFileSerial(fp, assigned_serial)
+                        identity_ready = True
+                    except Exception as error:
+                        writeInLogFile(fp, f"T_ID_TKO {error}")
+                        setLogFileSerial(fp, test_serial)
+                        print(f"DUT identity provisioning failed: {error}")
+                    finally:
+                        common.send("R_RLY_DUT_OFF")
+                if identity_ready:
                     common.send("R_PIN_SUC")
                 else:
                     common.send("R_PIN_TKO")
@@ -196,14 +211,9 @@ def serialCom(announce_ready=False):
                 print(f"Command received: {received_data}")
                 common.send("R_OBP_ACK")
                 try:
-                    setLogFileUid(fp, prog.read_stm32_uid())
-                    assigned_serial = provision_dut_serial()
-                    setLogFileSerial(fp, assigned_serial)
                     ob_ret = prog.ob_procedure()
                 except Exception as error:
-                    writeInLogFile(fp, f"T_ID_TKO {error}")
-                    setLogFileSerial(fp, test_serial)
-                    print(f"DUT identity provisioning failed: {error}")
+                    print(f"Option-byte programming failed: {error}")
                     ob_ret = -1
                 if (ob_ret == 1):
                     common.send("R_OBP_SUC")
