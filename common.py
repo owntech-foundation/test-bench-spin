@@ -26,6 +26,10 @@ def consume_controller_command():
             return None
         return _command_queue.pop(0)
 
+def clear_controller_commands():
+    with _command_lock:
+        _command_queue.clear()
+
 def request_controller_reset():
     global _reset_requested
     with _reset_lock:

@@ -126,6 +126,7 @@ def serialCom(announce_ready=False):
 
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
+                    common.clear_controller_commands()
                     closeLogFile()
                     now = datetime.datetime.now()
                     os.makedirs('test_reports', exist_ok=True)

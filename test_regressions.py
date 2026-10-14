@@ -42,6 +42,12 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(common.ser.write.call_args_list, expected)
         self.assertEqual(sleep.call_count, len(expected))
 
+    def test_clear_controller_commands(self):
+        common.ser = mock.Mock()
+        common.request_controller_command("R_RLY_USB_PWR_ON")
+        common.clear_controller_commands()
+        self.assertIsNone(common.consume_controller_command())
+
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
         with mock.patch.object(serial_com, "check_ping", return_value=False), \
