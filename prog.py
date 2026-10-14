@@ -163,3 +163,14 @@ def resetStLink():
 def shutdown():
 	ret = execute_cmd_prog("sudo shutdown -h now")
 	return (ret)
+
+def reset_controller(port):
+	"""Ask MCUboot to reset the tester after the application closes its port."""
+	cmd = f"./mcumgr-rpi --conntype=serial --connstring=dev={port},baud=115200,mtu=128 reset"
+	try:
+		result = subprocess.run(shlex.split(cmd), capture_output=True, text=True, timeout=8, check=False)
+		print("controller reset:", result.returncode, result.stdout.strip(), result.stderr.strip())
+		return result.returncode
+	except (OSError, subprocess.TimeoutExpired) as error:
+		print("controller reset failed:", error)
+		return 255

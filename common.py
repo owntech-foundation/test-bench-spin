@@ -1,10 +1,28 @@
 import serial
+import threading
 from serial.tools import list_ports
 from status_store import status
 
 device_port = None
 ser = None
 last_send = ""
+_reset_requested = False
+_reset_lock = threading.Lock()
+
+def request_controller_reset():
+    global _reset_requested
+    with _reset_lock:
+        if _reset_requested:
+            return False
+        _reset_requested = True
+        return True
+
+def consume_controller_reset():
+    global _reset_requested
+    with _reset_lock:
+        requested = _reset_requested
+        _reset_requested = False
+        return requested
 
 def send(response, noRepeat=False):
     global last_send

@@ -3,6 +3,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+import common
 from status_store import status
 
 
@@ -72,7 +73,7 @@ PAGE = r"""<!doctype html>
       <section class="panel"><h2>Automated sequence</h2><div id="steps" class="steps"></div><div class="progress"><div id="progress"></div></div><div id="measurements" class="measurements"></div></section>
       <section class="panel" style="margin-top:18px"><h2>Recent protocol activity</h2><div id="events" class="events"></div></section>
     </div>
-    <aside class="panel"><h2>Operator checklist</h2><ol id="operator-steps"></ol></aside>
+    <aside class="panel"><h2>Operator checklist</h2><ol id="operator-steps"></ol><button id="reset-controller" type="button">Stop handshake and reset SPIN</button><p id="reset-result" class="sub" aria-live="polite"></p></aside>
   </div>
 </main>
 <script>
@@ -98,6 +99,19 @@ function render(data) {
   $('events').innerHTML = data.events.length ? data.events.map(event => `<div class="event"><time>${escapeHtml(timeOnly(event.time))}</time><span class="direction">${escapeHtml(event.direction)}</span><span>${escapeHtml(event.message)}</span></div>`).join('') : '<p>No protocol activity yet.</p>';
   $('measurements').innerHTML = Object.entries(data.measurements).map(([key,value]) => `<span class="measure">${escapeHtml(key)} ${escapeHtml(value)}</span>`).join('');
 }
+
+$('reset-controller').addEventListener('click', async () => {
+  const result = $('reset-result');
+  result.textContent = 'Requesting reset…';
+  try {
+    const response = await fetch('/api/controller/reset', {method:'POST'});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || response.status);
+    result.textContent = 'Reset requested.';
+  } catch (error) {
+    result.textContent = `Reset failed: ${error.message}`;
+  }
+});
 
 async function refresh() {
   try {
@@ -133,6 +147,17 @@ class StatusHandler(BaseHTTPRequestHandler):
             self._send(PAGE.encode("utf-8"), "text/html; charset=utf-8", include_body=False)
         else:
             self._send(b'{"error":"not found"}', "application/json", 404, include_body=False)
+
+    def do_POST(self):
+        if self.path == "/api/controller/reset":
+            if not status.snapshot()["controller"]["connected"]:
+                self._send(b'{"error":"controller is not connected"}', "application/json", 409)
+                return
+            accepted = common.request_controller_reset()
+            payload = json.dumps({"status": "accepted" if accepted else "already_pending"}).encode("utf-8")
+            self._send(payload, "application/json", 202)
+        else:
+            self._send(b'{"error":"not found"}', "application/json", 404)
 
     def _send(self, payload, content_type, code=200, include_body=True):
         self.send_response(code)

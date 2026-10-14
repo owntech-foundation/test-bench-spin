@@ -45,6 +45,12 @@ def serialCom(announce_ready=False):
     next_ready_announcement = 0
     try:
         while True:
+            if common.consume_controller_reset():
+                # Stop the tester state machine before releasing the serial port.
+                common.send("R_STP")
+                time.sleep(0.2)
+                return "reset"
+
             if not service_ready:
                 now = time.monotonic()
                 if now >= next_ready_announcement:
