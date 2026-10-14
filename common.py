@@ -1,5 +1,6 @@
 import serial
 import threading
+import time
 from serial.tools import list_ports
 from status_store import status
 
@@ -10,6 +11,7 @@ _reset_requested = False
 _reset_lock = threading.Lock()
 _command_queue = []
 _command_lock = threading.Lock()
+SERIAL_BYTE_DELAY = 0.002
 
 def request_controller_command(command):
     with _command_lock:
@@ -47,8 +49,11 @@ def send(response, noRepeat=False):
     last_send = response
     print("sending: " + response)
     status.record(response, "sent")
-    response = response + "\r\n"
-    ser.write(response.encode('utf-8'))
+    # The controller's USB console has a small receive buffer. Long commands
+    # can otherwise be truncated and joined to the following command.
+    for byte in (response + "\r\n").encode("utf-8"):
+        ser.write(bytes((byte,)))
+        time.sleep(SERIAL_BYTE_DELAY)
 
 def find_device(target_vid, target_pid, name=None):
     for port in list_ports.comports():

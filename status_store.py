@@ -51,7 +51,7 @@ class TestStatus:
         self._last_message = None
         self._failed_steps = set()
         self._measurements = {}
-        self._relays = {"PB9": False, "PC13": False, "PB14": False}
+        self._relays = {"USB_PWR": False, "USB_DATA": False, "DUT": False}
 
     def set_controller(self, port):
         with self._lock:

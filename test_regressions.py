@@ -33,6 +33,15 @@ class RegressionTests(unittest.TestCase):
         serial_com.closeLogFile()
         common.ser = None
 
+    def test_send_paces_serial_bytes(self):
+        common.ser = mock.Mock()
+        with mock.patch.object(common.time, "sleep") as sleep:
+            common.send("R_RLY_DUT_ON")
+
+        expected = [mock.call(bytes((byte,))) for byte in b"R_RLY_DUT_ON\r\n"]
+        self.assertEqual(common.ser.write.call_args_list, expected)
+        self.assertEqual(sleep.call_count, len(expected))
+
     def test_failed_internet_ping_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
         with mock.patch.object(serial_com, "check_ping", return_value=False), \

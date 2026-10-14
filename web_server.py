@@ -80,9 +80,9 @@ PAGE = r"""<!doctype html>
     </div>
     <aside>
       <section class="panel"><h2>Relay diagnostics</h2><div class="diagnostics">
-        <div class="relay-row"><span>PB9 · USB VBUS/GND</span><span class="relay-actions"><button data-relay="PB9" data-enabled="true">ON</button><button data-relay="PB9" data-enabled="false">OFF</button></span></div>
-        <div class="relay-row"><span>PC13 · USB D+/D−</span><span class="relay-actions"><button data-relay="PC13" data-enabled="true">ON</button><button data-relay="PC13" data-enabled="false">OFF</button></span></div>
-        <div class="relay-row"><span>PB14 · DUT power</span><span class="relay-actions"><button data-relay="PB14" data-enabled="true">ON</button><button data-relay="PB14" data-enabled="false">OFF</button></span></div>
+        <div class="relay-row"><span>USB power · VBUS/GND</span><span class="relay-actions"><button data-relay="USB_PWR" data-enabled="true">ON</button><button data-relay="USB_PWR" data-enabled="false">OFF</button></span></div>
+        <div class="relay-row"><span>USB data · D+/D−</span><span class="relay-actions"><button data-relay="USB_DATA" data-enabled="true">ON</button><button data-relay="USB_DATA" data-enabled="false">OFF</button></span></div>
+        <div class="relay-row"><span>DUT power</span><span class="relay-actions"><button data-relay="DUT" data-enabled="true">ON</button><button data-relay="DUT" data-enabled="false">OFF</button></span></div>
         <button id="read-usb-voltage" type="button">Read USB 3.3 V</button>
         <div id="diagnostic-result" class="sub" aria-live="polite">No diagnostic command sent.</div>
       </div></section>
@@ -115,7 +115,7 @@ function render(data) {
   const relays = data.diagnostics?.relays || {};
   document.querySelectorAll('[data-relay]').forEach(button => {
     const relay = button.dataset.relay;
-    button.disabled = Boolean(relays[relay]) === (button.dataset.enabled !== 'true');
+    button.disabled = Boolean(relays[relay]) === (button.dataset.enabled === 'true');
   });
 }
 
@@ -202,7 +202,7 @@ class StatusHandler(BaseHTTPRequestHandler):
                     payload = json.loads(self.rfile.read(length) or b"{}")
                     relay = str(payload.get("relay", "")).upper()
                     enabled = payload.get("enabled")
-                    command = {"PB9": "R_RLY_PB9_", "PC13": "R_RLY_PC13_", "PB14": "R_RLY_PB14_"}[relay] + ("ON" if enabled is True else "OFF" if enabled is False else "")
+                    command = {"USB_PWR": "R_RLY_USB_PWR_", "USB_DATA": "R_RLY_USB_DATA_", "DUT": "R_RLY_DUT_"}[relay] + ("ON" if enabled is True else "OFF" if enabled is False else "")
                     if command.endswith("_"):
                         raise ValueError("enabled must be boolean")
                 except (ValueError, KeyError, json.JSONDecodeError):
