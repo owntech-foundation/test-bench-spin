@@ -144,6 +144,21 @@ class RegressionTests(unittest.TestCase):
         popen.return_value = process
         self.assertEqual(prog.execute_cmd_prog("usbreset 0483:374f"), 1)
 
+    def test_test_firmware_erases_existing_application_before_write(self):
+        with mock.patch.object(prog, "execute_cmd_prog", side_effect=[0, 0]) as execute:
+            self.assertEqual(prog.firm_write("bootloader-v1.1.0.bin"), 0)
+
+        self.assertEqual(execute.call_args_list, [
+            mock.call("st-flash erase", timeout_seconds=60),
+            mock.call("st-flash --reset write bootloader-v1.1.0.bin 0x8000000"),
+        ])
+
+    def test_test_firmware_stops_when_erase_fails(self):
+        with mock.patch.object(prog, "execute_cmd_prog", return_value=1) as execute:
+            self.assertEqual(prog.firm_write("bootloader-v1.1.0.bin"), 1)
+
+        execute.assert_called_once_with("st-flash erase", timeout_seconds=60)
+
     def test_status_tracks_a_successful_sequence(self):
         test_status = TestStatus()
         test_status.set_controller("/dev/ttyACM0")

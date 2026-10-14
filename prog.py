@@ -197,6 +197,13 @@ def abort_active_upload():
 	return 0
 
 def firm_write(bin_path, addr=0x08000000):
+	# A previously programmed DUT may still contain a valid MCUboot image.
+	# Replacing only the bootloader pages would let MCUboot start that old
+	# application instead of remaining in serial recovery mode. Erase the DUT
+	# first so the freshly written bootloader has no valid image to boot.
+	erase_ret = execute_cmd_prog("st-flash erase", timeout_seconds=60)
+	if erase_ret != 0:
+		return erase_ret
 	ret = execute_cmd_prog("st-flash --reset write " + bin_path + " " + str(hex(addr)))
 	# print("ret" + str(ret))
 	return (ret)
