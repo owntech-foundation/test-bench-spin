@@ -35,6 +35,7 @@ class RegressionTests(unittest.TestCase):
     def tearDown(self):
         serial_com.closeLogFile()
         serial_com._sfp_abort_requested.set()
+        serial_com.test_serial = None
         common.ser = None
 
     def test_send_paces_serial_bytes(self):
@@ -99,9 +100,9 @@ class RegressionTests(unittest.TestCase):
             mock.call("R_SFP_ABORT_ACK"),
         ])
 
-    def test_failed_internet_ping_sends_failure_response(self):
+    def test_failed_production_api_login_sends_failure_response(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
-        with mock.patch.object(serial_com, "check_ping", return_value=False), \
+        with mock.patch.object(serial_com, "connect_production_api", return_value=False), \
              mock.patch.object(common, "send") as send, \
              mock.patch.object(serial_com, "print"), \
              self.assertRaises(SystemExit):
@@ -166,12 +167,13 @@ class RegressionTests(unittest.TestCase):
     def test_stm32_uid_replaces_first_report_line(self):
         serial_com.isFileOpen = True
         with tempfile.TemporaryFile(mode="w+") as report_file:
-            report_file.write("STM32_UID UNAVAILABLE\n2026-10-14 12:00:00\nT_STR\n")
+            report_file.write("STM32_UID UNAVAILABLE\nSERIAL UNAVAILABLE\n2026-10-14 12:00:00\nT_STR\n")
             serial_com.setLogFileUid(report_file, "1234567890ABCDEF10203040")
+            serial_com.setLogFileSerial(report_file, "SPN1234567890")
             report_file.seek(0)
             self.assertEqual(
                 report_file.read(),
-                "STM32_UID 1234567890ABCDEF10203040\n2026-10-14 12:00:00\nT_STR\n",
+                "STM32_UID 1234567890ABCDEF10203040\nSERIAL SPN1234567890\n2026-10-14 12:00:00\nT_STR\n",
             )
 
     def test_option_byte_step_reads_uid_while_dut_is_powered(self):
@@ -180,7 +182,9 @@ class RegressionTests(unittest.TestCase):
         report_file = mock.MagicMock()
         serial_com.fp = report_file
         with mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040") as read_uid, \
+             mock.patch.object(serial_com, "provision_dut_serial", return_value="SPN1234567890"), \
              mock.patch.object(serial_com, "setLogFileUid") as set_uid, \
+             mock.patch.object(serial_com, "setLogFileSerial") as set_serial, \
              mock.patch.object(serial_com.prog, "ob_procedure", return_value=1), \
              mock.patch.object(serial_com.common, "send"), \
              mock.patch.object(serial_com, "print"), \
@@ -189,6 +193,59 @@ class RegressionTests(unittest.TestCase):
 
         read_uid.assert_called_once_with()
         set_uid.assert_called_once_with(report_file, "1234567890ABCDEF10203040")
+        set_serial.assert_called_once_with(report_file, "SPN1234567890")
+
+    def test_otp_serial_record_round_trip(self):
+        serial = "SPN1234567890"
+        record = prog._serial_record(serial)
+        self.assertEqual(len(record), prog.SERIAL_RECORD_SIZE)
+        self.assertEqual(prog._decode_serial_record(record), serial)
+        otp_data = record + b"\xff" * (prog.STM32_OTP_SIZE - len(record))
+        self.assertEqual(prog.find_otp_serial(otp_data), serial)
+
+    def test_existing_otp_serial_is_reused_without_api_generation(self):
+        serial = "SPN1234567890"
+        record = prog._serial_record(serial)
+        otp_data = record + b"\xff" * (prog.STM32_OTP_SIZE - len(record))
+        with mock.patch.object(prog, "read_stm32_otp", return_value=otp_data), \
+             mock.patch.object(serial_com.production_client, "generate_serial") as generate, \
+             mock.patch.object(prog, "write_otp_serial") as write:
+            self.assertEqual(serial_com.provision_dut_serial(), serial)
+        generate.assert_not_called()
+        write.assert_not_called()
+
+    def test_blank_otp_gets_api_serial_and_verified_write(self):
+        serial = "SPN1234567890"
+        otp_data = b"\xff" * prog.STM32_OTP_SIZE
+        with mock.patch.object(prog, "read_stm32_otp", return_value=otp_data), \
+             mock.patch.object(serial_com.production_client, "generate_serial", return_value=serial) as generate, \
+             mock.patch.object(prog, "write_otp_serial", return_value=serial) as write:
+            self.assertEqual(serial_com.provision_dut_serial(), serial)
+        generate.assert_called_once_with()
+        write.assert_called_once_with(serial, otp_data)
+
+    def test_otp_write_is_enabled_then_read_back_for_verification(self):
+        serial = "SPN1234567890"
+        blank_otp = b"\xff" * prog.STM32_OTP_SIZE
+        record = prog._serial_record(serial)
+        verified_otp = record + blank_otp[len(record):]
+        with mock.patch.object(prog, "_run_openocd") as openocd, \
+             mock.patch.object(prog, "read_stm32_otp", return_value=verified_otp):
+            self.assertEqual(prog.write_otp_serial(serial, blank_otp), serial)
+        commands = openocd.call_args.args[0]
+        self.assertIn("stm32l4x otp 1 enable", commands)
+        self.assertIn("stm32l4x otp 1 disable", commands)
+
+    def test_finished_report_is_uploaded_for_failed_or_successful_test(self):
+        common.ser = FakeSerial([b"T_STP\r\n"])
+        serial_com.isFileOpen = True
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com, "upload_current_report", return_value=True) as upload, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+        upload.assert_called_once_with(report_file)
 
     def test_test_firmware_erases_existing_application_before_write(self):
         with mock.patch.object(prog, "execute_cmd_prog", side_effect=[0, 0]) as execute:

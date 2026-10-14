@@ -6,6 +6,7 @@ import signal
 import struct
 import tempfile
 import threading
+import zlib
 from termcolor import colored
 import common
 import time
@@ -24,6 +25,11 @@ desired_ob = 0xffeff8aa #0xfbeff8aa <-- Nboot0 thinggy. Not required.
 
 STM32_UID_ADDRESS = 0x1FFF7590
 STM32_UID_SIZE = 12
+STM32_OTP_ADDRESS = 0x1FFF7000
+STM32_OTP_SIZE = 0x400
+SERIAL_RECORD_MAGIC = b"OTSN"
+SERIAL_RECORD_VERSION = 1
+SERIAL_RECORD_SIZE = 32
 
 def read_stm32_uid():
 	"""Read the DUT's factory-programmed 96-bit identifier through ST-LINK."""
@@ -60,6 +66,135 @@ def read_stm32_uid():
 			os.unlink(uid_path)
 		except FileNotFoundError:
 			pass
+
+def _run_openocd(commands, timeout_seconds=30):
+	command = [
+		"openocd",
+		"-f", "interface/stlink.cfg",
+		"-f", "target/stm32g4x.cfg",
+	]
+	for item in commands:
+		command.extend(["-c", item])
+	try:
+		result = subprocess.run(
+			command,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT,
+			text=True,
+			timeout=timeout_seconds,
+			check=False,
+		)
+	except (OSError, subprocess.TimeoutExpired) as error:
+		raise RuntimeError(f"OpenOCD failed: {error}") from error
+	if result.returncode != 0:
+		last_line = next((line.strip() for line in reversed(result.stdout.splitlines()) if line.strip()), "unknown error")
+		raise RuntimeError(f"OpenOCD returned {result.returncode}: {last_line}")
+	return result.stdout
+
+def read_stm32_otp():
+	fd, otp_path = tempfile.mkstemp(prefix="spin-otp-", suffix=".bin")
+	os.close(fd)
+	try:
+		_run_openocd([
+			"init",
+			"reset halt",
+			f"flash read_bank 1 {otp_path} 0 {hex(STM32_OTP_SIZE)}",
+			"reset run",
+			"shutdown",
+		])
+		with open(otp_path, "rb") as otp_file:
+			otp_data = otp_file.read()
+		if len(otp_data) != STM32_OTP_SIZE:
+			raise RuntimeError(f"OTP read returned {len(otp_data)} bytes instead of {STM32_OTP_SIZE}")
+		return otp_data
+	finally:
+		try:
+			os.unlink(otp_path)
+		except FileNotFoundError:
+			pass
+
+def _serial_record(serial):
+	serial_bytes = str(serial or "").strip().upper().encode("ascii")
+	if len(serial_bytes) != 13 or not re.fullmatch(rb"[A-Z0-9]{13}", serial_bytes):
+		raise ValueError("SPIN serial must contain exactly 13 uppercase ASCII letters or digits")
+	payload = struct.pack(
+		"<4sBBH13s7x",
+		SERIAL_RECORD_MAGIC,
+		SERIAL_RECORD_VERSION,
+		len(serial_bytes),
+		0,
+		serial_bytes,
+	)
+	return payload + struct.pack("<I", zlib.crc32(payload) & 0xFFFFFFFF)
+
+def _decode_serial_record(record):
+	if len(record) != SERIAL_RECORD_SIZE or record == b"\xff" * SERIAL_RECORD_SIZE:
+		return None
+	payload, stored_crc = record[:-4], struct.unpack("<I", record[-4:])[0]
+	if zlib.crc32(payload) & 0xFFFFFFFF != stored_crc:
+		return None
+	magic, version, serial_length, _reserved, serial_bytes = struct.unpack("<4sBBH13s7x", payload)
+	if magic != SERIAL_RECORD_MAGIC or version != SERIAL_RECORD_VERSION or serial_length != 13:
+		return None
+	try:
+		serial = serial_bytes.decode("ascii")
+	except UnicodeDecodeError:
+		return None
+	return serial if re.fullmatch(r"[A-Z0-9]{13}", serial) else None
+
+def find_otp_serial(otp_data):
+	if len(otp_data) != STM32_OTP_SIZE:
+		raise ValueError("Invalid STM32 OTP image size")
+	serial = None
+	for offset in range(0, STM32_OTP_SIZE, SERIAL_RECORD_SIZE):
+		candidate = _decode_serial_record(otp_data[offset:offset + SERIAL_RECORD_SIZE])
+		if candidate is not None:
+			serial = candidate
+	return serial
+
+def write_otp_serial(serial, otp_data=None):
+	if otp_data is None:
+		otp_data = read_stm32_otp()
+	existing_serial = find_otp_serial(otp_data)
+	if existing_serial is not None:
+		if existing_serial != serial:
+			raise RuntimeError(f"OTP already contains serial {existing_serial}")
+		return existing_serial
+
+	blank_record = b"\xff" * SERIAL_RECORD_SIZE
+	try:
+		offset = next(
+			offset
+			for offset in range(0, STM32_OTP_SIZE, SERIAL_RECORD_SIZE)
+			if otp_data[offset:offset + SERIAL_RECORD_SIZE] == blank_record
+		)
+	except StopIteration as error:
+		raise RuntimeError("No blank STM32 OTP serial slot remains") from error
+
+	record = _serial_record(serial)
+	fd, record_path = tempfile.mkstemp(prefix="spin-serial-", suffix=".bin")
+	try:
+		with os.fdopen(fd, "wb") as record_file:
+			record_file.write(record)
+		_run_openocd([
+			"init",
+			"reset halt",
+			"stm32l4x otp 1 enable",
+			f"flash write_bank 1 {record_path} {hex(offset)}",
+			"stm32l4x otp 1 disable",
+			"reset run",
+			"shutdown",
+		])
+	finally:
+		try:
+			os.unlink(record_path)
+		except FileNotFoundError:
+			pass
+
+	verified_data = read_stm32_otp()
+	if verified_data[offset:offset + SERIAL_RECORD_SIZE] != record:
+		raise RuntimeError("STM32 OTP serial verification failed")
+	return serial
 
 def execute_cmd_expected_return(cmd, expected_rtrn):
 	print(cmd)

@@ -4,9 +4,9 @@ import prog
 import serial
 import sys
 import os
-import subprocess
 import threading
 import time
+from production import ProductionError, production_client
 from status_store import status
 
 isFileOpen = False
@@ -14,6 +14,7 @@ fp = None
 _sfp_thread = None
 _sfp_abort_requested = threading.Event()
 _sfp_lock = threading.Lock()
+test_serial = None
 
 def _sample_upload_worker():
     global _sfp_thread
@@ -76,17 +77,62 @@ def setLogFileUid(file, stm32_uid):
     file.flush()
     file.seek(0, os.SEEK_END)
 
-def check_ping(hostname):
+def setLogFileSerial(file, serial):
+    """Replace the report's second metadata line with the assigned serial."""
+    if not isFileOpen or file is None:
+        print("! FILE IS NOT OPEN")
+        return
+    file.flush()
+    file.seek(0)
+    report_lines = file.readlines()
+    serial_line = "SERIAL " + (serial or "UNAVAILABLE") + "\n"
+    if len(report_lines) > 1 and report_lines[1].startswith("SERIAL "):
+        report_lines[1] = serial_line
+    else:
+        report_lines.insert(1 if report_lines else 0, serial_line)
+    file.seek(0)
+    file.truncate()
+    file.writelines(report_lines)
+    file.flush()
+    file.seek(0, os.SEEK_END)
+
+def connect_production_api():
     try:
-        response = subprocess.run(
-            ["ping", "-c", "3", hostname],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-            check=False,
-        )
-        return response.returncode == 0
-    except (OSError, subprocess.TimeoutExpired):
+        return production_client.connect()
+    except ProductionError as error:
+        print(error)
+        return False
+
+def provision_dut_serial():
+    global test_serial
+    otp_data = prog.read_stm32_otp()
+    existing_serial = prog.find_otp_serial(otp_data)
+    if existing_serial is not None:
+        test_serial = existing_serial
+        return existing_serial
+
+    generated_serial = production_client.generate_serial()
+    # Keep the API identity even if the irreversible OTP write fails, so the
+    # provisioning failure report can still be uploaded against that serial.
+    test_serial = generated_serial
+    return prog.write_otp_serial(generated_serial, otp_data)
+
+def upload_current_report(file):
+    if file is None or not isFileOpen:
+        return False
+    if test_serial is None:
+        print("Test report retained locally: no serial was assigned")
+        return False
+    file.flush()
+    file.seek(0)
+    report = file.read()
+    file.seek(0, os.SEEK_END)
+    try:
+        production_client.upload_report(test_serial, report)
+        print(f"Test report uploaded for {test_serial}")
+        return True
+    except ProductionError as error:
+        print(f"Test report retained locally: {error}")
         return False
 
 def closeLogFile():
@@ -97,7 +143,7 @@ def closeLogFile():
     isFileOpen = False
 
 def serialCom(announce_ready=False):
-    global fp, isFileOpen
+    global fp, isFileOpen, test_serial
     service_ready = not announce_ready
     next_ready_announcement = 0
     try:
@@ -129,8 +175,7 @@ def serialCom(announce_ready=False):
                 common.send("R_PRP")
 
             elif received_data == "C_PIN":
-                pingInternet = check_ping(hostname = "owntech.org")
-                if pingInternet:
+                if connect_production_api():
                     common.send("R_PIN_SUC")
                 else:
                     common.send("R_PIN_TKO")
@@ -150,8 +195,16 @@ def serialCom(announce_ready=False):
             elif received_data == "C_OBP":
                 print(f"Command received: {received_data}")
                 common.send("R_OBP_ACK")
-                setLogFileUid(fp, prog.read_stm32_uid())
-                ob_ret = prog.ob_procedure()
+                try:
+                    setLogFileUid(fp, prog.read_stm32_uid())
+                    assigned_serial = provision_dut_serial()
+                    setLogFileSerial(fp, assigned_serial)
+                    ob_ret = prog.ob_procedure()
+                except Exception as error:
+                    writeInLogFile(fp, f"T_ID_TKO {error}")
+                    setLogFileSerial(fp, test_serial)
+                    print(f"DUT identity provisioning failed: {error}")
+                    ob_ret = -1
                 if (ob_ret == 1):
                     common.send("R_OBP_SUC")
                 else:
@@ -192,6 +245,7 @@ def serialCom(announce_ready=False):
 
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
+                    test_serial = None
                     common.clear_controller_commands()
                     closeLogFile()
                     now = datetime.datetime.now()
@@ -199,11 +253,13 @@ def serialCom(announce_ready=False):
                     fp = open('test_reports/SPIN-TEST_' + str(now.isoformat()) + '.txt', 'w+')
                     isFileOpen = True
                     writeInLogFile(fp, "STM32_UID UNAVAILABLE")
+                    writeInLogFile(fp, "SERIAL UNAVAILABLE")
                     writeInLogFile(fp, str(now))
                     writeInLogFile(fp, received_data)
                 elif(received_data == "T_STP"):
                     if isFileOpen:
                         writeInLogFile(fp, received_data)
+                        upload_current_report(fp)
                         closeLogFile()
                     else:
                         print("Ignoring T_STP: no test report is open")
