@@ -8,6 +8,21 @@ ser = None
 last_send = ""
 _reset_requested = False
 _reset_lock = threading.Lock()
+_command_queue = []
+_command_lock = threading.Lock()
+
+def request_controller_command(command):
+    with _command_lock:
+        if len(_command_queue) >= 4:
+            return False
+        _command_queue.append(command)
+        return True
+
+def consume_controller_command():
+    with _command_lock:
+        if not _command_queue:
+            return None
+        return _command_queue.pop(0)
 
 def request_controller_reset():
     global _reset_requested

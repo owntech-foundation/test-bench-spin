@@ -51,6 +51,10 @@ def serialCom(announce_ready=False):
                 time.sleep(0.2)
                 return "reset"
 
+            command = common.consume_controller_command()
+            if command is not None:
+                common.send(command)
+
             if not service_ready:
                 now = time.monotonic()
                 if now >= next_ready_announcement:

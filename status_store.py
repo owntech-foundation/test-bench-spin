@@ -51,6 +51,7 @@ class TestStatus:
         self._last_message = None
         self._failed_steps = set()
         self._measurements = {}
+        self._relays = {"PB9": False, "PC13": False, "PB14": False}
 
     def set_controller(self, port):
         with self._lock:
@@ -82,6 +83,16 @@ class TestStatus:
         self._progress = None
 
     def _update_from_message(self, message):
+        if message.startswith("T_RLY "):
+            parts = message.split()
+            if len(parts) == 3 and parts[1] in self._relays:
+                self._relays[parts[1]] = parts[2] == "ON"
+            return
+
+        if message.startswith("T_USB_V "):
+            self._measurements["T_USB_V"] = message.split(" ", 1)[1] + " V"
+            return
+
         if message == "T_STR":
             self._test_state = "running"
             self._current_step = 0
@@ -189,6 +200,7 @@ class TestStatus:
                 "last_event_at": self._last_event_at,
                 "last_message": self._last_message,
                 "measurements": dict(self._measurements),
+                "diagnostics": {"relays": dict(self._relays)},
                 "steps": steps,
                 "operator_steps": list(OPERATOR_STEPS),
                 "events": list(self._events),

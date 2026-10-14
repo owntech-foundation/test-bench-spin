@@ -56,6 +56,11 @@ PAGE = r"""<!doctype html>
     .measurements { display:flex; flex-wrap:wrap; gap:8px; margin-top:14px; }
     .measure { padding:5px 8px; border:1px solid var(--line); border-radius:1px; color:var(--cyan); font:13px ui-monospace,monospace; }
     .error { display:none; margin-bottom:16px; padding:10px 14px; border:1px solid var(--red); background:#2b2022; color:var(--red); }
+    .diagnostics { display:grid; gap:8px; }
+    .relay-row { display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--line); padding-top:8px; }
+    .relay-actions { display:flex; gap:6px; }
+    button { border:1px solid var(--line); border-radius:1px; background:#20272c; color:var(--text); padding:6px 9px; cursor:pointer; }
+    button:hover { border-color:var(--cyan); color:var(--cyan); }
     @media (max-width:800px) { .grid,.summary { grid-template-columns:1fr; } header { align-items:flex-end; } .event { grid-template-columns:64px 1fr; } .event .direction { display:none; } }
   </style>
 </head>
@@ -73,7 +78,16 @@ PAGE = r"""<!doctype html>
       <section class="panel"><h2>Automated sequence</h2><div id="steps" class="steps"></div><div class="progress"><div id="progress"></div></div><div id="measurements" class="measurements"></div></section>
       <section class="panel" style="margin-top:18px"><h2>Recent protocol activity</h2><div id="events" class="events"></div></section>
     </div>
-    <aside class="panel"><h2>Operator checklist</h2><ol id="operator-steps"></ol><button id="reset-controller" type="button">Stop handshake and reset SPIN</button><p id="reset-result" class="sub" aria-live="polite"></p></aside>
+    <aside>
+      <section class="panel"><h2>Relay diagnostics</h2><div class="diagnostics">
+        <div class="relay-row"><span>PB9 · USB VBUS/GND</span><span class="relay-actions"><button data-relay="PB9" data-enabled="true">ON</button><button data-relay="PB9" data-enabled="false">OFF</button></span></div>
+        <div class="relay-row"><span>PC13 · USB D+/D−</span><span class="relay-actions"><button data-relay="PC13" data-enabled="true">ON</button><button data-relay="PC13" data-enabled="false">OFF</button></span></div>
+        <div class="relay-row"><span>PB14 · DUT power</span><span class="relay-actions"><button data-relay="PB14" data-enabled="true">ON</button><button data-relay="PB14" data-enabled="false">OFF</button></span></div>
+        <button id="read-usb-voltage" type="button">Read USB 3.3 V</button>
+        <div id="diagnostic-result" class="sub" aria-live="polite">No diagnostic command sent.</div>
+      </div></section>
+      <section class="panel" style="margin-top:18px"><h2>Operator checklist</h2><ol id="operator-steps"></ol><button id="reset-controller" type="button">Stop handshake and reset SPIN</button><p id="reset-result" class="sub" aria-live="polite"></p></section>
+    </aside>
   </div>
 </main>
 <script>
@@ -98,7 +112,34 @@ function render(data) {
   $('operator-steps').innerHTML = data.operator_steps.map(step => `<li>${escapeHtml(step)}</li>`).join('');
   $('events').innerHTML = data.events.length ? data.events.map(event => `<div class="event"><time>${escapeHtml(timeOnly(event.time))}</time><span class="direction">${escapeHtml(event.direction)}</span><span>${escapeHtml(event.message)}</span></div>`).join('') : '<p>No protocol activity yet.</p>';
   $('measurements').innerHTML = Object.entries(data.measurements).map(([key,value]) => `<span class="measure">${escapeHtml(key)} ${escapeHtml(value)}</span>`).join('');
+  const relays = data.diagnostics?.relays || {};
+  document.querySelectorAll('[data-relay]').forEach(button => {
+    const relay = button.dataset.relay;
+    button.disabled = Boolean(relays[relay]) === (button.dataset.enabled !== 'true');
+  });
 }
+
+document.querySelectorAll('[data-relay]').forEach(button => button.addEventListener('click', async () => {
+  const result = $('diagnostic-result');
+  result.textContent = `Setting ${button.dataset.relay}…`;
+  try {
+    const response = await fetch('/api/diagnostics/relay', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({relay:button.dataset.relay, enabled:button.dataset.enabled === 'true'})});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || response.status);
+    result.textContent = 'Relay command sent.';
+  } catch (error) { result.textContent = `Relay command failed: ${error.message}`; }
+}));
+
+$('read-usb-voltage').addEventListener('click', async () => {
+  const result = $('diagnostic-result');
+  result.textContent = 'Reading USB voltage…';
+  try {
+    const response = await fetch('/api/diagnostics/voltage', {method:'POST'});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || response.status);
+    result.textContent = 'Voltage request sent; watch the measurement below.';
+  } catch (error) { result.textContent = `Voltage request failed: ${error.message}`; }
+});
 
 $('reset-controller').addEventListener('click', async () => {
   const result = $('reset-result');
@@ -149,6 +190,29 @@ class StatusHandler(BaseHTTPRequestHandler):
             self._send(b'{"error":"not found"}', "application/json", 404, include_body=False)
 
     def do_POST(self):
+        if self.path in ("/api/diagnostics/relay", "/api/diagnostics/voltage"):
+            if not status.snapshot()["controller"]["connected"]:
+                self._send(b'{"error":"controller is not connected"}', "application/json", 409)
+                return
+            if self.path.endswith("/voltage"):
+                command = "R_USB_V"
+            else:
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                    payload = json.loads(self.rfile.read(length) or b"{}")
+                    relay = str(payload.get("relay", "")).upper()
+                    enabled = payload.get("enabled")
+                    command = {"PB9": "R_RLY_PB9_", "PC13": "R_RLY_PC13_", "PB14": "R_RLY_PB14_"}[relay] + ("ON" if enabled is True else "OFF" if enabled is False else "")
+                    if command.endswith("_"):
+                        raise ValueError("enabled must be boolean")
+                except (ValueError, KeyError, json.JSONDecodeError):
+                    self._send(b'{"error":"invalid relay request"}', "application/json", 400)
+                    return
+            accepted = common.request_controller_command(command)
+            payload = json.dumps({"status": "accepted" if accepted else "busy", "command": command}).encode("utf-8")
+            self._send(payload, "application/json", 202 if accepted else 429)
+            return
+
         if self.path == "/api/controller/reset":
             if not status.snapshot()["controller"]["connected"]:
                 self._send(b'{"error":"controller is not connected"}', "application/json", 409)
