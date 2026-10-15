@@ -15,6 +15,8 @@ _sfp_thread = None
 _sfp_abort_requested = threading.Event()
 _sfp_lock = threading.Lock()
 test_serial = None
+report_upload_requested = False
+report_uploaded = False
 
 def _sample_upload_worker():
     global _sfp_thread
@@ -149,7 +151,7 @@ def closeLogFile():
     isFileOpen = False
 
 def serialCom(announce_ready=False):
-    global fp, isFileOpen, test_serial
+    global fp, isFileOpen, test_serial, report_upload_requested, report_uploaded
     service_ready = not announce_ready
     next_ready_announcement = 0
     try:
@@ -181,25 +183,27 @@ def serialCom(announce_ready=False):
                 common.send("R_PRP")
 
             elif received_data == "C_PIN":
+                common.send("R_PIN_SUC" if connect_production_api() else "R_PIN_TKO")
+
+            elif received_data == "C_IDP":
                 identity_ready = False
-                if connect_production_api():
-                    common.send("R_RLY_DUT_ON")
-                    time.sleep(0.5)
-                    try:
-                        setLogFileUid(fp, prog.read_stm32_uid())
-                        assigned_serial = provision_dut_serial()
-                        setLogFileSerial(fp, assigned_serial)
-                        identity_ready = True
-                    except Exception as error:
-                        writeInLogFile(fp, f"T_ID_TKO {error}")
-                        setLogFileSerial(fp, test_serial)
-                        print(f"DUT identity provisioning failed: {error}")
-                    finally:
-                        common.send("R_RLY_DUT_OFF")
+                common.send("R_RLY_DUT_ON")
+                time.sleep(0.5)
+                try:
+                    setLogFileUid(fp, prog.read_stm32_uid())
+                    assigned_serial = provision_dut_serial()
+                    setLogFileSerial(fp, assigned_serial)
+                    identity_ready = True
+                except Exception as error:
+                    writeInLogFile(fp, f"T_ID_TKO {error}")
+                    setLogFileSerial(fp, test_serial)
+                    print(f"DUT identity provisioning failed: {error}")
+                finally:
+                    common.send("R_RLY_DUT_OFF")
                 if identity_ready:
-                    common.send("R_PIN_SUC")
+                    common.send("R_IDP_SUC")
                 else:
-                    common.send("R_PIN_TKO")
+                    common.send("R_IDP_TKO")
 
             elif received_data == "C_SLR":
                 print(f"Command received: {received_data}")
@@ -251,6 +255,11 @@ def serialCom(announce_ready=False):
                 abort_ret = abort_sample_upload()
                 common.send("R_SFP_ABORT_ACK" if abort_ret == 0 else "R_SFP_ABORT_TKO")
 
+            elif received_data == "C_RUP":
+                report_upload_requested = True
+                report_uploaded = upload_current_report(fp)
+                common.send("R_RUP_SUC" if report_uploaded else "R_RUP_TKO")
+
             elif received_data == "C_SRP":
                 sd_ret = prog.shutdown()
                 print("shutdown" + str(sd_ret))
@@ -262,6 +271,8 @@ def serialCom(announce_ready=False):
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
                     test_serial = None
+                    report_upload_requested = False
+                    report_uploaded = False
                     common.clear_controller_commands()
                     closeLogFile()
                     now = datetime.datetime.now()
@@ -275,7 +286,11 @@ def serialCom(announce_ready=False):
                 elif(received_data == "T_STP"):
                     if isFileOpen:
                         writeInLogFile(fp, received_data)
-                        upload_current_report(fp)
+                        # Older firmware and tests stopped before the explicit
+                        # report-upload command. Preserve that fallback without
+                        # uploading a completed report twice.
+                        if not report_upload_requested:
+                            report_uploaded = upload_current_report(fp)
                         closeLogFile()
                     else:
                         print("Ignoring T_STP: no test report is open")

@@ -37,6 +37,8 @@ class RegressionTests(unittest.TestCase):
         serial_com.closeLogFile()
         serial_com._sfp_abort_requested.set()
         serial_com.test_serial = None
+        serial_com.report_upload_requested = False
+        serial_com.report_uploaded = False
         common.ser = None
 
     def test_send_paces_serial_bytes(self):
@@ -110,6 +112,17 @@ class RegressionTests(unittest.TestCase):
             serial_com.serialCom()
         send.assert_called_once_with("R_PIN_TKO")
 
+    def test_api_ping_does_not_provision_identity(self):
+        common.ser = FakeSerial([b"C_PIN\r\n"])
+        with mock.patch.object(serial_com, "connect_production_api", return_value=True) as connect, \
+             mock.patch.object(serial_com, "provision_dut_serial") as provision, \
+             mock.patch.object(common, "send") as send, \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+        connect.assert_called_once_with()
+        provision.assert_not_called()
+        send.assert_called_once_with("R_PIN_SUC")
+
     def test_api_identity_generation_keeps_passphrase(self):
         client = production.ProductionClient()
         sdk = mock.Mock()
@@ -141,12 +154,11 @@ class RegressionTests(unittest.TestCase):
         sdk.list_products.assert_called_once_with(page=1, page_size=20, search="SPN1234567890")
 
     def test_api_step_provisions_identity_before_hardware_tests(self):
-        common.ser = FakeSerial([b"C_PIN\r\n"])
+        common.ser = FakeSerial([b"C_IDP\r\n"])
         serial_com.isFileOpen = True
         report_file = mock.MagicMock()
         serial_com.fp = report_file
-        with mock.patch.object(serial_com, "connect_production_api", return_value=True), \
-             mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040"), \
+        with mock.patch.object(serial_com.prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040"), \
              mock.patch.object(serial_com, "provision_dut_serial", return_value="SPN1234567890"), \
              mock.patch.object(serial_com, "setLogFileUid") as set_uid, \
              mock.patch.object(serial_com, "setLogFileSerial") as set_serial, \
@@ -159,7 +171,7 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(send.call_args_list, [
             mock.call("R_RLY_DUT_ON"),
             mock.call("R_RLY_DUT_OFF"),
-            mock.call("R_PIN_SUC"),
+            mock.call("R_IDP_SUC"),
         ])
         set_uid.assert_called_once_with(report_file, "1234567890ABCDEF10203040")
         set_serial.assert_called_once_with(report_file, "SPN1234567890")
@@ -338,6 +350,19 @@ class RegressionTests(unittest.TestCase):
             serial_com.serialCom()
         upload.assert_called_once_with(report_file)
 
+    def test_explicit_report_upload_responds_and_is_not_repeated_on_stop(self):
+        common.ser = FakeSerial([b"C_RUP\r\n", b"T_STP\r\n"])
+        serial_com.isFileOpen = True
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com, "upload_current_report", return_value=True) as upload, \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+        upload.assert_called_once_with(report_file)
+        send.assert_called_once_with("R_RUP_SUC")
+
     def test_test_firmware_erases_existing_application_before_write(self):
         with mock.patch.object(prog, "execute_cmd_prog", side_effect=[0, 0]) as execute:
             self.assertEqual(prog.firm_write("bootloader-v1.1.0.bin"), 0)
@@ -356,12 +381,13 @@ class RegressionTests(unittest.TestCase):
     def test_status_tracks_a_successful_sequence(self):
         test_status = TestStatus()
         test_status.set_controller("/dev/ttyACM0")
-        for message in ("T_STR", "C_PRP", "C_PIN", "C_SLR", "T_SHC_SUC", "T_CU1 12.3", "T_LDO 3.3", "T_OBP_SUC", "T_TFP_SUC", "T_CU2 36.5", "T_SFP_SUC", "T_STP"):
+        for message in ("T_STR", "C_PRP", "C_PIN", "C_IDP", "C_SLR", "T_SHC_SUC", "T_CU1 12.3", "T_LDO 3.3", "T_OBP_SUC", "T_TFP_SUC", "T_CU2 36.5", "T_SFP_SUC", "C_RUP", "R_RUP_SUC", "T_STP"):
             test_status.record(message)
         snapshot = test_status.snapshot()
         self.assertEqual(snapshot["test"]["state"], "passed")
         self.assertEqual(snapshot["measurements"]["T_LDO"], "3.3 V")
         self.assertTrue(snapshot["controller"]["connected"])
+        self.assertEqual(snapshot["steps"][-2]["id"], "report")
 
     def test_web_status_endpoint(self):
         server = start_server("127.0.0.1", 0)

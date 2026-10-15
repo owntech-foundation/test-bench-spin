@@ -7,14 +7,16 @@ TEST_STEPS = (
     ("start", "Start test", "Wait for the operator to press START."),
     ("pi", "Check Raspberry Pi", "Confirm that the controller service responds."),
     ("network", "Production API", "Authenticate with the OwnTech production service."),
+    ("identity", "Provision identity", "Read or assign the serial and passphrase in STM32 OTP."),
     ("stlink", "Reset ST-LINK", "Reset the programmer before accessing the DUT."),
     ("shorts", "Short-circuit test", "Inspect the DUT pin signature for shorts."),
     ("current_1", "Initial current", "Measure current before programming."),
     ("ldo", "LDO voltage", "Measure the DUT 3.3 V rail."),
-    ("option_bytes", "Provision identity", "Reuse or assign the serial, then configure STM32 option bytes."),
+    ("option_bytes", "Configure option bytes", "Program and verify the STM32 option bytes."),
     ("test_firmware", "Program test firmware", "Flash the DUT through ST-LINK."),
     ("current_2", "Programmed current", "Measure current with the test firmware."),
     ("sample_firmware", "Program sample firmware", "Upload through MCUboot over USB."),
+    ("report", "Upload test report", "Send the completed result to the production API."),
     ("finish", "Finish", "Stop logging and remove the tested board."),
 )
 
@@ -106,10 +108,12 @@ class TestStatus:
         command_steps = {
             "C_PRP": "pi",
             "C_PIN": "network",
+            "C_IDP": "identity",
             "C_SLR": "stlink",
             "C_OBP": "option_bytes",
             "C_TFP": "test_firmware",
             "C_SFP": "sample_firmware",
+            "C_RUP": "report",
         }
         if message in command_steps:
             self._activate(command_steps[message])
@@ -122,6 +126,7 @@ class TestStatus:
             "T_TFP": "test_firmware",
             "T_CU2": "current_2",
             "T_SFP": "sample_firmware",
+            "T_RUP": "report",
         }
         for prefix, step_id in test_steps.items():
             if message.startswith(prefix):
@@ -137,10 +142,12 @@ class TestStatus:
 
         response_steps = {
             "R_PIN": "network",
+            "R_IDP": "identity",
             "R_SLR": "stlink",
             "R_OBP": "option_bytes",
             "R_TFP": "test_firmware",
             "R_SFP": "sample_firmware",
+            "R_RUP": "report",
         }
         for prefix, step_id in response_steps.items():
             if message.startswith(prefix):
