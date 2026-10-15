@@ -5,6 +5,7 @@ import threading
 
 
 SERIAL_PATTERN = re.compile(r"^[A-Z0-9]{13}$")
+PASSPHRASE_PATTERN = re.compile(r"^[A-Za-z0-9]{10}$")
 
 
 class ProductionError(RuntimeError):
@@ -50,7 +51,17 @@ class ProductionClient:
             self.connect()
         return self._sdk
 
-    def generate_serial(self):
+    @staticmethod
+    def _validated_identity(content):
+        serial = str(content.get("serial") or "").strip().upper()
+        passphrase = str(content.get("passphrase") or "").strip()
+        if not SERIAL_PATTERN.fullmatch(serial):
+            raise ProductionError("Production API returned an invalid serial")
+        if not PASSPHRASE_PATTERN.fullmatch(passphrase):
+            raise ProductionError("Production API returned an invalid passphrase")
+        return {"serial": serial, "passphrase": passphrase}
+
+    def generate_identity(self):
         with self._lock:
             sdk = self._connected_sdk()
             try:
@@ -63,10 +74,29 @@ class ProductionClient:
             if response.get("status_code") != 200:
                 raise ProductionError(f"Serial generation returned HTTP {response.get('status_code')}")
             content = response.get("content") or {}
-            serial = str(content.get("serial") or "").strip().upper()
-            if not SERIAL_PATTERN.fullmatch(serial):
-                raise ProductionError("Production API returned an invalid serial")
-            return serial
+            return self._validated_identity(content)
+
+    def generate_serial(self):
+        """Backward-compatible helper for callers that only need the serial."""
+        return self.generate_identity()["serial"]
+
+    def get_passphrase(self, serial):
+        normalized_serial = str(serial or "").strip().upper()
+        if not SERIAL_PATTERN.fullmatch(normalized_serial):
+            raise ProductionError("Cannot retrieve a passphrase without a valid serial")
+        with self._lock:
+            sdk = self._connected_sdk()
+            try:
+                response = sdk.list_products(page=1, page_size=20, search=normalized_serial)
+            except Exception as error:
+                raise ProductionError(f"Passphrase lookup failed: {error}") from error
+            if response.get("status_code") != 200:
+                raise ProductionError(f"Passphrase lookup returned HTTP {response.get('status_code')}")
+            content = response.get("content") or {}
+            for item in content.get("items") or []:
+                if str(item.get("serial") or "").strip().upper() == normalized_serial:
+                    return self._validated_identity(item)["passphrase"]
+            raise ProductionError(f"Production API has no identity for serial {normalized_serial}")
 
     def upload_report(self, serial, report):
         normalized_serial = str(serial or "").strip().upper()

@@ -106,16 +106,22 @@ def connect_production_api():
 def provision_dut_serial():
     global test_serial
     otp_data = prog.read_stm32_otp()
-    existing_serial = prog.find_otp_serial(otp_data)
+    existing_identity = prog.find_otp_identity(otp_data)
+    existing_serial = existing_identity["serial"]
     if existing_serial is not None:
         test_serial = existing_serial
+        if existing_identity["passphrase"] is None:
+            passphrase = production_client.get_passphrase(existing_serial)
+            prog.write_otp_identity(existing_serial, passphrase, otp_data)
         return existing_serial
 
-    generated_serial = production_client.generate_serial()
+    generated_identity = production_client.generate_identity()
+    generated_serial = generated_identity["serial"]
     # Keep the API identity even if the irreversible OTP write fails, so the
     # provisioning failure report can still be uploaded against that serial.
     test_serial = generated_serial
-    return prog.write_otp_serial(generated_serial, otp_data)
+    prog.write_otp_identity(generated_serial, generated_identity["passphrase"], otp_data)
+    return generated_serial
 
 def upload_current_report(file):
     if file is None or not isFileOpen:

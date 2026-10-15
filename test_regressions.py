@@ -11,6 +11,7 @@ from unittest import mock
 import common
 import main
 import prog
+import production
 import serial_com
 from status_store import TestStatus
 from web_server import start_server
@@ -108,6 +109,36 @@ class RegressionTests(unittest.TestCase):
              self.assertRaises(SystemExit):
             serial_com.serialCom()
         send.assert_called_once_with("R_PIN_TKO")
+
+    def test_api_identity_generation_keeps_passphrase(self):
+        client = production.ProductionClient()
+        sdk = mock.Mock()
+        sdk.generate_serial.return_value = {
+            "status_code": 200,
+            "content": {"serial": "SPN1234567890", "passphrase": "Ab3dE6gH9k"},
+        }
+        with mock.patch.object(client, "_connected_sdk", return_value=sdk), \
+             mock.patch.object(client, "_setting", side_effect=lambda _name, default=None: default):
+            self.assertEqual(
+                client.generate_identity(),
+                {"serial": "SPN1234567890", "passphrase": "Ab3dE6gH9k"},
+            )
+
+    def test_api_passphrase_lookup_selects_exact_serial(self):
+        client = production.ProductionClient()
+        sdk = mock.Mock()
+        sdk.list_products.return_value = {
+            "status_code": 200,
+            "content": {
+                "items": [
+                    {"serial": "SPN0000000000", "passphrase": "Wrong12345"},
+                    {"serial": "SPN1234567890", "passphrase": "Ab3dE6gH9k"},
+                ],
+            },
+        }
+        with mock.patch.object(client, "_connected_sdk", return_value=sdk):
+            self.assertEqual(client.get_passphrase("SPN1234567890"), "Ab3dE6gH9k")
+        sdk.list_products.assert_called_once_with(page=1, page_size=20, search="SPN1234567890")
 
     def test_api_step_provisions_identity_before_hardware_tests(self):
         common.ser = FakeSerial([b"C_PIN\r\n"])
@@ -221,26 +252,52 @@ class RegressionTests(unittest.TestCase):
         otp_data = record + b"\xff" * (prog.STM32_OTP_SIZE - len(record))
         self.assertEqual(prog.find_otp_serial(otp_data), serial)
 
-    def test_existing_otp_serial_is_reused_without_api_generation(self):
+    def test_otp_passphrase_record_round_trip(self):
+        passphrase = "Ab3dE6gH9k"
+        record = prog._passphrase_record(passphrase)
+        self.assertEqual(len(record), prog.SERIAL_RECORD_SIZE)
+        self.assertEqual(prog._decode_passphrase_record(record), passphrase)
+        otp_data = record + b"\xff" * (prog.STM32_OTP_SIZE - len(record))
+        self.assertEqual(prog.find_otp_passphrase(otp_data), passphrase)
+
+    def test_existing_otp_identity_is_reused_without_api_generation(self):
         serial = "SPN1234567890"
+        passphrase = "Ab3dE6gH9k"
+        records = prog._serial_record(serial) + prog._passphrase_record(passphrase)
+        otp_data = records + b"\xff" * (prog.STM32_OTP_SIZE - len(records))
+        with mock.patch.object(prog, "read_stm32_otp", return_value=otp_data), \
+             mock.patch.object(serial_com.production_client, "generate_identity") as generate, \
+             mock.patch.object(serial_com.production_client, "get_passphrase") as lookup, \
+             mock.patch.object(prog, "write_otp_identity") as write:
+            self.assertEqual(serial_com.provision_dut_serial(), serial)
+        generate.assert_not_called()
+        lookup.assert_not_called()
+        write.assert_not_called()
+
+    def test_legacy_otp_serial_gets_api_passphrase_without_new_serial(self):
+        serial = "SPN1234567890"
+        passphrase = "Ab3dE6gH9k"
         record = prog._serial_record(serial)
         otp_data = record + b"\xff" * (prog.STM32_OTP_SIZE - len(record))
         with mock.patch.object(prog, "read_stm32_otp", return_value=otp_data), \
-             mock.patch.object(serial_com.production_client, "generate_serial") as generate, \
-             mock.patch.object(prog, "write_otp_serial") as write:
+             mock.patch.object(serial_com.production_client, "generate_identity") as generate, \
+             mock.patch.object(serial_com.production_client, "get_passphrase", return_value=passphrase) as lookup, \
+             mock.patch.object(prog, "write_otp_identity") as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
         generate.assert_not_called()
-        write.assert_not_called()
+        lookup.assert_called_once_with(serial)
+        write.assert_called_once_with(serial, passphrase, otp_data)
 
-    def test_blank_otp_gets_api_serial_and_verified_write(self):
+    def test_blank_otp_gets_api_identity_and_verified_write(self):
         serial = "SPN1234567890"
+        passphrase = "Ab3dE6gH9k"
         otp_data = b"\xff" * prog.STM32_OTP_SIZE
         with mock.patch.object(prog, "read_stm32_otp", return_value=otp_data), \
-             mock.patch.object(serial_com.production_client, "generate_serial", return_value=serial) as generate, \
-             mock.patch.object(prog, "write_otp_serial", return_value=serial) as write:
+             mock.patch.object(serial_com.production_client, "generate_identity", return_value={"serial": serial, "passphrase": passphrase}) as generate, \
+             mock.patch.object(prog, "write_otp_identity", return_value={"serial": serial, "passphrase": passphrase}) as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
         generate.assert_called_once_with()
-        write.assert_called_once_with(serial, otp_data)
+        write.assert_called_once_with(serial, passphrase, otp_data)
 
     def test_otp_write_is_enabled_then_read_back_for_verification(self):
         serial = "SPN1234567890"
@@ -253,6 +310,22 @@ class RegressionTests(unittest.TestCase):
         commands = openocd.call_args.args[0]
         self.assertIn("stm32l4x otp 1 enable", commands)
         self.assertIn("stm32l4x otp 1 disable", commands)
+
+    def test_otp_identity_write_programs_and_verifies_both_records(self):
+        serial = "SPN1234567890"
+        passphrase = "Ab3dE6gH9k"
+        blank_otp = b"\xff" * prog.STM32_OTP_SIZE
+        serial_record = prog._serial_record(serial)
+        passphrase_record = prog._passphrase_record(passphrase)
+        serial_only = serial_record + blank_otp[len(serial_record):]
+        complete = serial_record + passphrase_record + blank_otp[len(serial_record) + len(passphrase_record):]
+        with mock.patch.object(prog, "_run_openocd") as openocd, \
+             mock.patch.object(prog, "read_stm32_otp", side_effect=[serial_only, complete]):
+            self.assertEqual(
+                prog.write_otp_identity(serial, passphrase, blank_otp),
+                {"serial": serial, "passphrase": passphrase},
+            )
+        self.assertEqual(openocd.call_count, 2)
 
     def test_finished_report_is_uploaded_for_failed_or_successful_test(self):
         common.ser = FakeSerial([b"T_STP\r\n"])

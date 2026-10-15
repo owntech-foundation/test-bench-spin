@@ -30,6 +30,9 @@ STM32_OTP_SIZE = 0x400
 SERIAL_RECORD_MAGIC = b"OTSN"
 SERIAL_RECORD_VERSION = 1
 SERIAL_RECORD_SIZE = 32
+PASSPHRASE_RECORD_MAGIC = b"OTPP"
+PASSPHRASE_RECORD_VERSION = 1
+PASSPHRASE_LENGTH = 10
 
 def read_stm32_uid():
 	"""Read the DUT's factory-programmed 96-bit identifier through ST-LINK."""
@@ -142,6 +145,35 @@ def _decode_serial_record(record):
 		return None
 	return serial if re.fullmatch(r"[A-Z0-9]{13}", serial) else None
 
+def _passphrase_record(passphrase):
+	passphrase_bytes = str(passphrase or "").strip().encode("ascii")
+	if len(passphrase_bytes) != PASSPHRASE_LENGTH or not re.fullmatch(rb"[A-Za-z0-9]{10}", passphrase_bytes):
+		raise ValueError("SPIN passphrase must contain exactly 10 ASCII letters or digits")
+	payload = struct.pack(
+		"<4sBBH10s10x",
+		PASSPHRASE_RECORD_MAGIC,
+		PASSPHRASE_RECORD_VERSION,
+		len(passphrase_bytes),
+		0,
+		passphrase_bytes,
+	)
+	return payload + struct.pack("<I", zlib.crc32(payload) & 0xFFFFFFFF)
+
+def _decode_passphrase_record(record):
+	if len(record) != SERIAL_RECORD_SIZE or record == b"\xff" * SERIAL_RECORD_SIZE:
+		return None
+	payload, stored_crc = record[:-4], struct.unpack("<I", record[-4:])[0]
+	if zlib.crc32(payload) & 0xFFFFFFFF != stored_crc:
+		return None
+	magic, version, passphrase_length, _reserved, passphrase_bytes = struct.unpack("<4sBBH10s10x", payload)
+	if magic != PASSPHRASE_RECORD_MAGIC or version != PASSPHRASE_RECORD_VERSION or passphrase_length != PASSPHRASE_LENGTH:
+		return None
+	try:
+		passphrase = passphrase_bytes.decode("ascii")
+	except UnicodeDecodeError:
+		return None
+	return passphrase if re.fullmatch(r"[A-Za-z0-9]{10}", passphrase) else None
+
 def find_otp_serial(otp_data):
 	if len(otp_data) != STM32_OTP_SIZE:
 		raise ValueError("Invalid STM32 OTP image size")
@@ -152,15 +184,23 @@ def find_otp_serial(otp_data):
 			serial = candidate
 	return serial
 
-def write_otp_serial(serial, otp_data=None):
-	if otp_data is None:
-		otp_data = read_stm32_otp()
-	existing_serial = find_otp_serial(otp_data)
-	if existing_serial is not None:
-		if existing_serial != serial:
-			raise RuntimeError(f"OTP already contains serial {existing_serial}")
-		return existing_serial
+def find_otp_passphrase(otp_data):
+	if len(otp_data) != STM32_OTP_SIZE:
+		raise ValueError("Invalid STM32 OTP image size")
+	passphrase = None
+	for offset in range(0, STM32_OTP_SIZE, SERIAL_RECORD_SIZE):
+		candidate = _decode_passphrase_record(otp_data[offset:offset + SERIAL_RECORD_SIZE])
+		if candidate is not None:
+			passphrase = candidate
+	return passphrase
 
+def find_otp_identity(otp_data):
+	return {
+		"serial": find_otp_serial(otp_data),
+		"passphrase": find_otp_passphrase(otp_data),
+	}
+
+def _write_otp_record(record, otp_data, label, filename_prefix):
 	blank_record = b"\xff" * SERIAL_RECORD_SIZE
 	try:
 		offset = next(
@@ -169,10 +209,9 @@ def write_otp_serial(serial, otp_data=None):
 			if otp_data[offset:offset + SERIAL_RECORD_SIZE] == blank_record
 		)
 	except StopIteration as error:
-		raise RuntimeError("No blank STM32 OTP serial slot remains") from error
+		raise RuntimeError(f"No blank STM32 OTP {label} slot remains") from error
 
-	record = _serial_record(serial)
-	fd, record_path = tempfile.mkstemp(prefix="spin-serial-", suffix=".bin")
+	fd, record_path = tempfile.mkstemp(prefix=filename_prefix, suffix=".bin")
 	try:
 		with os.fdopen(fd, "wb") as record_file:
 			record_file.write(record)
@@ -193,8 +232,40 @@ def write_otp_serial(serial, otp_data=None):
 
 	verified_data = read_stm32_otp()
 	if verified_data[offset:offset + SERIAL_RECORD_SIZE] != record:
-		raise RuntimeError("STM32 OTP serial verification failed")
+		raise RuntimeError(f"STM32 OTP {label} verification failed")
+	return verified_data
+
+def write_otp_serial(serial, otp_data=None):
+	if otp_data is None:
+		otp_data = read_stm32_otp()
+	existing_serial = find_otp_serial(otp_data)
+	if existing_serial is not None:
+		if existing_serial != serial:
+			raise RuntimeError(f"OTP already contains serial {existing_serial}")
+		return existing_serial
+
+	record = _serial_record(serial)
+	_write_otp_record(record, otp_data, "serial", "spin-serial-")
 	return serial
+
+def write_otp_identity(serial, passphrase, otp_data=None):
+	if otp_data is None:
+		otp_data = read_stm32_otp()
+	existing = find_otp_identity(otp_data)
+	if existing["serial"] is not None and existing["serial"] != serial:
+		raise RuntimeError(f"OTP already contains serial {existing['serial']}")
+	if existing["passphrase"] is not None and existing["passphrase"] != passphrase:
+		raise RuntimeError("OTP already contains a different passphrase")
+
+	if existing["serial"] is None:
+		otp_data = _write_otp_record(_serial_record(serial), otp_data, "serial", "spin-serial-")
+	if existing["passphrase"] is None:
+		otp_data = _write_otp_record(_passphrase_record(passphrase), otp_data, "passphrase", "spin-passphrase-")
+
+	verified = find_otp_identity(otp_data)
+	if verified != {"serial": serial, "passphrase": passphrase}:
+		raise RuntimeError("STM32 OTP identity verification failed")
+	return verified
 
 def execute_cmd_expected_return(cmd, expected_rtrn):
 	print(cmd)
