@@ -92,6 +92,12 @@ def should_log_test_event(line):
 
 
 def report_step_for_event(line):
+    if line in (
+            "T_RLY USB_DATA ON",
+            "T_RLY USB_DATA OFF",
+            "T_RLY USB_PWR ON",
+            "T_RLY USB_PWR OFF"):
+        return "usb_power"
     for prefix, step in REPORT_EVENT_STEPS:
         if line.startswith(prefix):
             return step
@@ -105,6 +111,16 @@ def begin_report_step(file, step):
     writeInLogFile(file, REPORT_STEP_SEPARATOR)
     writeInLogFile(file, REPORT_STEP_NAMES[step])
     report_current_step = step
+
+
+def write_report_result(file, step, success, detail=None):
+    if not isFileOpen or file is None:
+        return
+    begin_report_step(file, step)
+    result = "SUCCESS" if success else "FAILURE"
+    if detail:
+        result += f" ({detail})"
+    writeInLogFile(file, f"RESULT: {result}")
 
 
 def write_test_event(file, line):
@@ -285,10 +301,13 @@ def serialCom(announce_ready=False):
                 service_ready = True
 
             elif received_data == "C_PRP":
+                write_report_result(fp, "pi", True)
                 common.send("R_PRP")
 
             elif received_data == "C_PIN":
-                common.send("R_PIN_SUC" if connect_production_api() else "R_PIN_TKO")
+                api_connected = connect_production_api()
+                write_report_result(fp, "network", api_connected)
+                common.send("R_PIN_SUC" if api_connected else "R_PIN_TKO")
 
             elif received_data == "C_IDP":
                 identity_ready = False
@@ -317,13 +336,19 @@ def serialCom(announce_ready=False):
                 print(f"Command received: {received_data}")
                 rs_ret = prog.resetStLink()
                 if (rs_ret == 0):
+                    write_report_result(fp, "stlink", True)
                     common.send("R_SLR_SUC")
                 elif (rs_ret == 1):
+                    write_report_result(fp, "stlink", False, "R_SLR_FND")
                     common.send("R_SLR_FND")
                 elif (rs_ret == 2):
+                    write_report_result(fp, "stlink", False, "R_SLR_FPM")
                     common.send("R_SLR_FPM")
                 elif (rs_ret == 255):
+                    write_report_result(fp, "stlink", False, "R_SLR_PNA")
                     common.send("R_SLR_PNA")
+                else:
+                    write_report_result(fp, "stlink", False, f"code {rs_ret}")
 
             elif received_data == "C_OBP":
                 print(f"Command received: {received_data}")
@@ -334,8 +359,10 @@ def serialCom(announce_ready=False):
                     print(f"Option-byte programming failed: {error}")
                     ob_ret = -1
                 if (ob_ret == 1):
+                    write_report_result(fp, "option_bytes", True)
                     common.send("R_OBP_SUC")
                 else:
+                    write_report_result(fp, "option_bytes", False, f"code {ob_ret}")
                     common.send("R_OBP_TKO")
 
             elif received_data == "C_TFP":

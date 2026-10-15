@@ -117,6 +117,58 @@ class RegressionTests(unittest.TestCase):
                 "Provision identity\n",
             )
 
+    def test_report_records_command_step_results(self):
+        serial_com.isFileOpen = True
+        serial_com.reset_report_relay_states()
+        with tempfile.TemporaryFile(mode="w+") as report_file:
+            serial_com.write_report_result(report_file, "pi", True)
+            serial_com.write_report_result(report_file, "network", False)
+            serial_com.write_report_result(report_file, "stlink", False, "R_SLR_FND")
+            serial_com.write_report_result(report_file, "option_bytes", True)
+            report_file.seek(0)
+            self.assertEqual(
+                report_file.read(),
+                "------\t------\n"
+                "Check Raspberry Pi\n"
+                "RESULT: SUCCESS\n"
+                "------\t------\n"
+                "Production API\n"
+                "RESULT: FAILURE\n"
+                "------\t------\n"
+                "Reset ST-LINK\n"
+                "RESULT: FAILURE (R_SLR_FND)\n"
+                "------\t------\n"
+                "Configure option bytes\n"
+                "RESULT: SUCCESS\n",
+            )
+
+    def test_usb_relays_are_grouped_under_usb_power(self):
+        serial_com.isFileOpen = True
+        serial_com.reset_report_relay_states()
+        with tempfile.TemporaryFile(mode="w+") as report_file:
+            for event in (
+                    "T_CU2 36.500",
+                    "T_RLY USB_DATA ON",
+                    "T_RLY USB_PWR ON",
+                    "T_USB_3V3 3.290",
+                    "T_RLY USB_DATA OFF",
+                    "T_RLY USB_PWR OFF"):
+                serial_com.write_test_event(report_file, event)
+            report_file.seek(0)
+            self.assertEqual(
+                report_file.read(),
+                "------\t------\n"
+                "Programmed current\n"
+                "T_CU2 36.500\n"
+                "------\t------\n"
+                "USB power\n"
+                "T_RLY USB_DATA ON\n"
+                "T_RLY USB_PWR ON\n"
+                "T_USB_3V3 3.290\n"
+                "T_RLY USB_DATA OFF\n"
+                "T_RLY USB_PWR OFF\n",
+            )
+
     def test_otp_checker_powers_dut_off_after_read(self):
         statuses = [
             {"controller": {"connected": True}, "test": {"state": "idle"}},
