@@ -18,6 +18,28 @@ test_serial = None
 test_serial_preexisting = None
 report_upload_requested = False
 report_uploaded = False
+report_relay_states = {}
+
+
+def reset_report_relay_states():
+    report_relay_states.clear()
+
+
+def should_log_test_event(line):
+    """Suppress repeated relay states while preserving real transitions."""
+    if not line.startswith("T_RLY "):
+        return True
+
+    parts = line.split()
+    if len(parts) != 3 or parts[2] not in ("ON", "OFF"):
+        return True
+
+    relay = parts[1]
+    state = parts[2]
+    if report_relay_states.get(relay) == state:
+        return False
+    report_relay_states[relay] = state
+    return True
 
 def _sample_upload_worker():
     global _sfp_thread
@@ -280,6 +302,7 @@ def serialCom(announce_ready=False):
                     report_upload_requested = False
                     report_uploaded = False
                     common.clear_controller_commands()
+                    reset_report_relay_states()
                     closeLogFile()
                     now = datetime.datetime.now()
                     os.makedirs('test_reports', exist_ok=True)
@@ -301,7 +324,8 @@ def serialCom(announce_ready=False):
                     else:
                         print("Ignoring T_STP: no test report is open")
                 else:
-                    writeInLogFile(fp, received_data)
+                    if should_log_test_event(received_data):
+                        writeInLogFile(fp, received_data)
             else:
                 print(f"received: `{received_data}`")
 

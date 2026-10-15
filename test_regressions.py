@@ -42,6 +42,7 @@ class RegressionTests(unittest.TestCase):
         serial_com.test_serial_preexisting = None
         serial_com.report_upload_requested = False
         serial_com.report_uploaded = False
+        serial_com.reset_report_relay_states()
         common.ser = None
 
     def test_send_paces_serial_bytes(self):
@@ -58,6 +59,17 @@ class RegressionTests(unittest.TestCase):
         common.request_controller_command("R_RLY_USB_PWR_ON")
         common.clear_controller_commands()
         self.assertIsNone(common.consume_controller_command())
+
+    def test_report_logs_only_relay_state_transitions(self):
+        serial_com.reset_report_relay_states()
+
+        self.assertTrue(serial_com.should_log_test_event("T_RLY DUT ON"))
+        self.assertTrue(serial_com.should_log_test_event("T_LDO 3.300"))
+        self.assertFalse(serial_com.should_log_test_event("T_RLY DUT ON"))
+        self.assertFalse(serial_com.should_log_test_event("T_RLY DUT ON"))
+        self.assertTrue(serial_com.should_log_test_event("T_RLY DUT OFF"))
+        self.assertFalse(serial_com.should_log_test_event("T_RLY DUT OFF"))
+        self.assertTrue(serial_com.should_log_test_event("T_RLY DUT ON"))
 
     def test_otp_checker_powers_dut_off_after_read(self):
         statuses = [
