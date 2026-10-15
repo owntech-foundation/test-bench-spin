@@ -3,6 +3,7 @@ import unittest
 import threading
 import json
 import http.client
+import io
 import struct
 import tempfile
 import urllib.request
@@ -85,6 +86,18 @@ class RegressionTests(unittest.TestCase):
              self.assertRaises(check_otp_identity.OtpCheckError):
             check_otp_identity.read_fitted_spin_identity()
         set_power.assert_not_called()
+
+    def test_otp_checker_displays_passphrase(self):
+        identity = {"serial": "SPN1234567890", "passphrase": "test-passphrase"}
+        with mock.patch.object(
+                check_otp_identity,
+                "read_fitted_spin_identity",
+                return_value=("1234567890ABCDEF10203040", identity)), \
+             mock.patch("sys.stdout", new_callable=io.StringIO) as output:
+            result = check_otp_identity.main()
+
+        self.assertEqual(result, 0)
+        self.assertIn("OTP passphrase: test-passphrase", output.getvalue())
 
     def test_firmware_upload_exception_returns_failure_response(self):
         common.ser = FakeSerial([b"C_TFP\r\n"])

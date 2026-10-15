@@ -93,7 +93,7 @@ def main():
     serial = identity.get("serial")
     print(f"STM32 UID: {uid or 'unavailable'}")
     print(f"OTP serial: {serial or 'not present'}")
-    print(f"OTP passphrase record: {'present' if identity.get('passphrase') else 'not present'}")
+    print(f"OTP passphrase: {identity.get('passphrase') or 'not present'}")
     return 0 if serial else 2
 
 
