@@ -37,6 +37,7 @@ class RegressionTests(unittest.TestCase):
         serial_com.closeLogFile()
         serial_com._sfp_abort_requested.set()
         serial_com.test_serial = None
+        serial_com.test_serial_preexisting = None
         serial_com.report_upload_requested = False
         serial_com.report_uploaded = False
         common.ser = None
@@ -282,6 +283,7 @@ class RegressionTests(unittest.TestCase):
              mock.patch.object(serial_com.production_client, "get_passphrase") as lookup, \
              mock.patch.object(prog, "write_otp_identity") as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
+        self.assertTrue(serial_com.test_serial_preexisting)
         generate.assert_not_called()
         lookup.assert_not_called()
         write.assert_not_called()
@@ -296,6 +298,7 @@ class RegressionTests(unittest.TestCase):
              mock.patch.object(serial_com.production_client, "get_passphrase", return_value=passphrase) as lookup, \
              mock.patch.object(prog, "write_otp_identity") as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
+        self.assertTrue(serial_com.test_serial_preexisting)
         generate.assert_not_called()
         lookup.assert_called_once_with(serial)
         write.assert_called_once_with(serial, passphrase, otp_data)
@@ -308,6 +311,7 @@ class RegressionTests(unittest.TestCase):
              mock.patch.object(serial_com.production_client, "generate_identity", return_value={"serial": serial, "passphrase": passphrase}) as generate, \
              mock.patch.object(prog, "write_otp_identity", return_value={"serial": serial, "passphrase": passphrase}) as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
+        self.assertFalse(serial_com.test_serial_preexisting)
         generate.assert_called_once_with()
         write.assert_called_once_with(serial, passphrase, otp_data)
 
@@ -381,11 +385,12 @@ class RegressionTests(unittest.TestCase):
     def test_status_tracks_a_successful_sequence(self):
         test_status = TestStatus()
         test_status.set_controller("/dev/ttyACM0")
-        for message in ("T_STR", "C_PRP", "C_PIN", "C_IDP", "C_SLR", "T_SHC_SUC", "T_CU1 12.3", "T_LDO 3.3", "T_OBP_SUC", "T_TFP_SUC", "T_CU2 36.5", "T_SFP_SUC", "C_RUP", "R_RUP_SUC", "T_STP"):
+        for message in ("T_STR", "C_PRP", "C_PIN", "C_IDP", "C_SLR", "T_SHC_SUC", "T_CU1 12.3", "T_LDO 3.3", "T_OBP_SUC", "T_TFP_SUC", "T_CU2 36.5", "T_USB_3V3 3.29", "T_SFP_SUC", "C_RUP", "R_RUP_SUC", "T_STP"):
             test_status.record(message)
         snapshot = test_status.snapshot()
         self.assertEqual(snapshot["test"]["state"], "passed")
         self.assertEqual(snapshot["measurements"]["T_LDO"], "3.3 V")
+        self.assertEqual(snapshot["measurements"]["T_USB_3V3"], "3.29 V")
         self.assertTrue(snapshot["controller"]["connected"])
         self.assertEqual(snapshot["steps"][-2]["id"], "report")
 

@@ -91,8 +91,9 @@ class TestStatus:
                 self._relays[parts[1]] = parts[2] == "ON"
             return
 
-        if message.startswith("T_USB_V "):
-            self._measurements["T_USB_V"] = message.split(" ", 1)[1] + " V"
+        if message.startswith(("T_USB_V ", "T_USB_3V3 ")):
+            prefix, value = message.split(" ", 1)
+            self._measurements[prefix] = value + " V"
             return
 
         if message == "T_STR":
@@ -172,10 +173,10 @@ class TestStatus:
             self._test_finished_at = _timestamp()
 
     def _record_measurement(self, prefix, message):
-        if prefix not in ("T_CU1", "T_CU2", "T_LDO") or " " not in message:
+        if prefix not in ("T_CU1", "T_CU2", "T_LDO", "T_USB_3V3") or " " not in message:
             return
         value = message.split(" ", 1)[1]
-        unit = "V" if prefix == "T_LDO" else "mA"
+        unit = "V" if prefix in ("T_LDO", "T_USB_3V3") else "mA"
         self._measurements[prefix] = f"{value} {unit}"
 
     def snapshot(self):

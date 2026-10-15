@@ -15,6 +15,7 @@ _sfp_thread = None
 _sfp_abort_requested = threading.Event()
 _sfp_lock = threading.Lock()
 test_serial = None
+test_serial_preexisting = None
 report_upload_requested = False
 report_uploaded = False
 
@@ -106,10 +107,11 @@ def connect_production_api():
         return False
 
 def provision_dut_serial():
-    global test_serial
+    global test_serial, test_serial_preexisting
     otp_data = prog.read_stm32_otp()
     existing_identity = prog.find_otp_identity(otp_data)
     existing_serial = existing_identity["serial"]
+    test_serial_preexisting = existing_serial is not None
     if existing_serial is not None:
         test_serial = existing_serial
         if existing_identity["passphrase"] is None:
@@ -151,7 +153,7 @@ def closeLogFile():
     isFileOpen = False
 
 def serialCom(announce_ready=False):
-    global fp, isFileOpen, test_serial, report_upload_requested, report_uploaded
+    global fp, isFileOpen, test_serial, test_serial_preexisting, report_upload_requested, report_uploaded
     service_ready = not announce_ready
     next_ready_announcement = 0
     try:
@@ -193,9 +195,12 @@ def serialCom(announce_ready=False):
                     setLogFileUid(fp, prog.read_stm32_uid())
                     assigned_serial = provision_dut_serial()
                     setLogFileSerial(fp, assigned_serial)
+                    writeInLogFile(fp, f"T_SERIAL_PRESENT {'YES' if test_serial_preexisting else 'NO'}")
                     identity_ready = True
                 except Exception as error:
                     writeInLogFile(fp, f"T_ID_TKO {error}")
+                    presence = "UNKNOWN" if test_serial_preexisting is None else ("YES" if test_serial_preexisting else "NO")
+                    writeInLogFile(fp, f"T_SERIAL_PRESENT {presence}")
                     setLogFileSerial(fp, test_serial)
                     print(f"DUT identity provisioning failed: {error}")
                 finally:
@@ -271,6 +276,7 @@ def serialCom(announce_ready=False):
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
                     test_serial = None
+                    test_serial_preexisting = None
                     report_upload_requested = False
                     report_uploaded = False
                     common.clear_controller_commands()
