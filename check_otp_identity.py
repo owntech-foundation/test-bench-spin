@@ -6,12 +6,14 @@ import os
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import prog
 
 
 STATUS_URL = os.getenv("OWNTESTER_STATUS_URL", "http://127.0.0.1:8080").rstrip("/")
+REPORT_CHECKER_URL = "https://devices.owntech.org/"
 
 
 class OtpCheckError(RuntimeError):
@@ -91,9 +93,15 @@ def main():
         return 1
 
     serial = identity.get("serial")
+    passphrase = identity.get("passphrase")
     print(f"STM32 UID: {uid or 'unavailable'}")
     print(f"OTP serial: {serial or 'not present'}")
-    print(f"OTP passphrase: {identity.get('passphrase') or 'not present'}")
+    print(f"OTP passphrase: {passphrase or 'not present'}")
+    if serial and passphrase:
+        query = urllib.parse.urlencode({"s": serial, "p": passphrase})
+        print(f"Online report: {REPORT_CHECKER_URL}?{query}")
+    else:
+        print("Online report: unavailable")
     return 0 if serial else 2
 
 

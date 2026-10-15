@@ -88,7 +88,7 @@ class RegressionTests(unittest.TestCase):
         set_power.assert_not_called()
 
     def test_otp_checker_displays_passphrase(self):
-        identity = {"serial": "SPN1234567890", "passphrase": "test-passphrase"}
+        identity = {"serial": "SPN1234567890", "passphrase": "test passphrase/+"}
         with mock.patch.object(
                 check_otp_identity,
                 "read_fitted_spin_identity",
@@ -97,7 +97,11 @@ class RegressionTests(unittest.TestCase):
             result = check_otp_identity.main()
 
         self.assertEqual(result, 0)
-        self.assertIn("OTP passphrase: test-passphrase", output.getvalue())
+        self.assertIn("OTP passphrase: test passphrase/+", output.getvalue())
+        self.assertIn(
+            "Online report: https://devices.owntech.org/?s=SPN1234567890&p=test+passphrase%2F%2B",
+            output.getvalue(),
+        )
 
     def test_firmware_upload_exception_returns_failure_response(self):
         common.ser = FakeSerial([b"C_TFP\r\n"])
