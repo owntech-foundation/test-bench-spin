@@ -14,6 +14,7 @@ fp = None
 _sfp_thread = None
 _sfp_abort_requested = threading.Event()
 _sfp_lock = threading.Lock()
+_report_file_lock = threading.RLock()
 test_serial = None
 test_serial_preexisting = None
 report_upload_requested = False
@@ -92,6 +93,10 @@ def should_log_test_event(line):
 
 
 def report_step_for_event(line):
+    if report_current_step == "start" and line in (
+            "T_RLY USB_DATA OFF",
+            "T_RLY USB_PWR OFF"):
+        return "start"
     if line in (
             "T_RLY USB_DATA ON",
             "T_RLY USB_DATA OFF",
@@ -106,21 +111,23 @@ def report_step_for_event(line):
 
 def begin_report_step(file, step):
     global report_current_step
-    if step == report_current_step:
-        return
-    writeInLogFile(file, REPORT_STEP_SEPARATOR)
-    writeInLogFile(file, REPORT_STEP_NAMES[step])
-    report_current_step = step
+    with _report_file_lock:
+        if step == report_current_step:
+            return
+        writeInLogFile(file, REPORT_STEP_SEPARATOR)
+        writeInLogFile(file, REPORT_STEP_NAMES[step])
+        report_current_step = step
 
 
 def write_report_result(file, step, success, detail=None):
-    if not isFileOpen or file is None:
-        return
-    begin_report_step(file, step)
-    result = "SUCCESS" if success else "FAILURE"
-    if detail:
-        result += f" ({detail})"
-    writeInLogFile(file, f"RESULT: {result}")
+    with _report_file_lock:
+        if not isFileOpen or file is None:
+            return
+        begin_report_step(file, step)
+        result = "SUCCESS" if success else "FAILURE"
+        if detail:
+            result += f" ({detail})"
+        writeInLogFile(file, f"RESULT: {result}")
 
 
 def write_test_event(file, line):
@@ -144,6 +151,12 @@ def _sample_upload_worker():
             sfp_ret = 255
 
         if not _sfp_abort_requested.is_set():
+            write_report_result(
+                fp,
+                "sample_firmware",
+                sfp_ret == 0,
+                None if sfp_ret == 0 else f"code {sfp_ret}",
+            )
             common.send("R_SFP_SUC" if sfp_ret == 0 else "R_SFP_TKO")
     finally:
         with _sfp_lock:
@@ -169,12 +182,13 @@ def abort_sample_upload():
     return abort_ret
 
 def writeInLogFile(file, line):
-    if isFileOpen and file is not None:
-        file.write(line + "\n")
-        file.flush()
-    else:
-        print("! FILE IS NOT OPEN")
-        #abort test command ??
+    with _report_file_lock:
+        if isFileOpen and file is not None:
+            file.write(line + "\n")
+            file.flush()
+        else:
+            print("! FILE IS NOT OPEN")
+            #abort test command ??
 
 def setLogFileUid(file, stm32_uid):
     """Replace the report's first line while preserving all test events."""
@@ -373,8 +387,10 @@ def serialCom(announce_ready=False):
                     print(f"Test firmware upload failed: {error}")
                     tfp_ret = 255
                 if (tfp_ret == 0):
+                    write_report_result(fp, "test_firmware", True)
                     common.send("R_TFP_SUC")
                 else:
+                    write_report_result(fp, "test_firmware", False, f"code {tfp_ret}")
                     common.send("R_TFP_TKO")
                     # Do not leave the tester waiting in the failure-choice
                     # state, where a button press could start the next step

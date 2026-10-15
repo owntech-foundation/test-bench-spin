@@ -77,6 +77,8 @@ class RegressionTests(unittest.TestCase):
         with tempfile.TemporaryFile(mode="w+") as report_file:
             for event in (
                     "T_STR",
+                    "T_RLY USB_DATA OFF",
+                    "T_RLY USB_PWR OFF",
                     "T_RLY DUT ON",
                     "T_CU1 12.300",
                     "T_RLY DUT ON",
@@ -89,6 +91,8 @@ class RegressionTests(unittest.TestCase):
                 "------\t------\n"
                 "Start test\n"
                 "T_STR\n"
+                "T_RLY USB_DATA OFF\n"
+                "T_RLY USB_PWR OFF\n"
                 "T_RLY DUT ON\n"
                 "------\t------\n"
                 "Initial current\n"
@@ -226,6 +230,30 @@ class RegressionTests(unittest.TestCase):
             mock.call("R_TFP_TKO"),
             mock.call("R_STP"),
         ])
+
+    def test_test_firmware_records_result(self):
+        common.ser = FakeSerial([b"C_TFP\r\n"])
+        serial_com.isFileOpen = True
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(prog, "firm_write", return_value=0), \
+             mock.patch.object(serial_com, "write_report_result") as result, \
+             mock.patch.object(serial_com.common, "send"), \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        result.assert_called_once_with(report_file, "test_firmware", True)
+
+    def test_sample_firmware_worker_records_result(self):
+        serial_com.fp = mock.MagicMock()
+        with mock.patch.object(prog, "bootloader_write", return_value=0), \
+             mock.patch.object(serial_com, "write_report_result") as result, \
+             mock.patch.object(serial_com.common, "send"):
+            serial_com._sfp_abort_requested.clear()
+            serial_com._sample_upload_worker()
+
+        result.assert_called_once_with(serial_com.fp, "sample_firmware", True, None)
 
     def test_sample_upload_abort_is_acknowledged(self):
         common.ser = FakeSerial([b"C_SFP_ABORT\r\n"])
