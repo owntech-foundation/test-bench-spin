@@ -9,6 +9,7 @@ import urllib.request
 from unittest import mock
 
 import common
+import check_otp_identity
 import main
 import prog
 import production
@@ -56,6 +57,34 @@ class RegressionTests(unittest.TestCase):
         common.request_controller_command("R_RLY_USB_PWR_ON")
         common.clear_controller_commands()
         self.assertIsNone(common.consume_controller_command())
+
+    def test_otp_checker_powers_dut_off_after_read(self):
+        statuses = [
+            {"controller": {"connected": True}, "test": {"state": "idle"}},
+            {"diagnostics": {"relays": {"DUT": True}}},
+            {"diagnostics": {"relays": {"DUT": False}}},
+        ]
+        otp_data = prog._serial_record("SPN1234567890") + b"\xff" * (prog.STM32_OTP_SIZE - prog.SERIAL_RECORD_SIZE)
+        with mock.patch.object(check_otp_identity, "_status", side_effect=statuses), \
+             mock.patch.object(check_otp_identity, "_set_dut_power") as set_power, \
+             mock.patch.object(check_otp_identity.time, "sleep"), \
+             mock.patch.object(prog, "read_stm32_uid", return_value="1234567890ABCDEF10203040"), \
+             mock.patch.object(prog, "read_stm32_otp", return_value=otp_data):
+            uid, identity = check_otp_identity.read_fitted_spin_identity()
+        self.assertEqual(uid, "1234567890ABCDEF10203040")
+        self.assertEqual(identity["serial"], "SPN1234567890")
+        self.assertEqual(set_power.call_args_list, [mock.call(True), mock.call(False)])
+
+    def test_otp_checker_refuses_during_active_test(self):
+        active = {
+            "controller": {"connected": True},
+            "test": {"state": "running", "finished_at": None},
+        }
+        with mock.patch.object(check_otp_identity, "_status", return_value=active), \
+             mock.patch.object(check_otp_identity, "_set_dut_power") as set_power, \
+             self.assertRaises(check_otp_identity.OtpCheckError):
+            check_otp_identity.read_fitted_spin_identity()
+        set_power.assert_not_called()
 
     def test_firmware_upload_exception_returns_failure_response(self):
         common.ser = FakeSerial([b"C_TFP\r\n"])
