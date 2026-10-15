@@ -71,6 +71,52 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(serial_com.should_log_test_event("T_RLY DUT OFF"))
         self.assertTrue(serial_com.should_log_test_event("T_RLY DUT ON"))
 
+    def test_report_separates_logical_steps(self):
+        serial_com.isFileOpen = True
+        serial_com.reset_report_relay_states()
+        with tempfile.TemporaryFile(mode="w+") as report_file:
+            for event in (
+                    "T_STR",
+                    "T_RLY DUT ON",
+                    "T_CU1 12.300",
+                    "T_RLY DUT ON",
+                    "T_LDO 3.300",
+                    "T_LDO_TKO"):
+                serial_com.write_test_event(report_file, event)
+            report_file.seek(0)
+            self.assertEqual(
+                report_file.read(),
+                "------\t------\n"
+                "Start test\n"
+                "T_STR\n"
+                "T_RLY DUT ON\n"
+                "------\t------\n"
+                "Initial current\n"
+                "T_CU1 12.300\n"
+                "------\t------\n"
+                "LDO voltage\n"
+                "T_LDO 3.300\n"
+                "T_LDO_TKO\n",
+            )
+
+    def test_report_names_command_driven_steps(self):
+        serial_com.isFileOpen = True
+        serial_com.reset_report_relay_states()
+        with tempfile.TemporaryFile(mode="w+") as report_file:
+            serial_com.begin_report_step(report_file, "pi")
+            serial_com.begin_report_step(report_file, "network")
+            serial_com.begin_report_step(report_file, "identity")
+            report_file.seek(0)
+            self.assertEqual(
+                report_file.read(),
+                "------\t------\n"
+                "Check Raspberry Pi\n"
+                "------\t------\n"
+                "Production API\n"
+                "------\t------\n"
+                "Provision identity\n",
+            )
+
     def test_otp_checker_powers_dut_off_after_read(self):
         statuses = [
             {"controller": {"connected": True}, "test": {"state": "idle"}},

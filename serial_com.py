@@ -19,10 +19,59 @@ test_serial_preexisting = None
 report_upload_requested = False
 report_uploaded = False
 report_relay_states = {}
+report_current_step = None
+REPORT_STEP_SEPARATOR = "------\t------"
+
+REPORT_EVENT_STEPS = (
+    ("T_STR", "start"),
+    ("T_SERIAL_PRESENT", "identity"),
+    ("T_ID_", "identity"),
+    ("T_SHC", "shorts"),
+    ("T_CU1", "current_1"),
+    ("T_LDO", "ldo"),
+    ("T_OBP", "option_bytes"),
+    ("T_TFP", "test_firmware"),
+    ("T_CU2", "current_2"),
+    ("T_USB_3V3", "usb_power"),
+    ("T_SFP", "sample_firmware"),
+    ("T_RUP", "report"),
+    ("T_STP", "finish"),
+)
+
+REPORT_COMMAND_STEPS = {
+    "C_PRP": "pi",
+    "C_PIN": "network",
+    "C_IDP": "identity",
+    "C_SLR": "stlink",
+    "C_OBP": "option_bytes",
+    "C_TFP": "test_firmware",
+    "C_SFP": "sample_firmware",
+    "C_RUP": "report",
+}
+
+REPORT_STEP_NAMES = {
+    "start": "Start test",
+    "pi": "Check Raspberry Pi",
+    "network": "Production API",
+    "identity": "Provision identity",
+    "stlink": "Reset ST-LINK",
+    "shorts": "Short-circuit test",
+    "current_1": "Initial current",
+    "ldo": "LDO voltage",
+    "option_bytes": "Configure option bytes",
+    "test_firmware": "Program test firmware",
+    "current_2": "Programmed current",
+    "usb_power": "USB power",
+    "sample_firmware": "Program sample firmware",
+    "report": "Upload test report",
+    "finish": "Finish",
+}
 
 
 def reset_report_relay_states():
+    global report_current_step
     report_relay_states.clear()
+    report_current_step = None
 
 
 def should_log_test_event(line):
@@ -40,6 +89,34 @@ def should_log_test_event(line):
         return False
     report_relay_states[relay] = state
     return True
+
+
+def report_step_for_event(line):
+    for prefix, step in REPORT_EVENT_STEPS:
+        if line.startswith(prefix):
+            return step
+    return None
+
+
+def begin_report_step(file, step):
+    global report_current_step
+    if step == report_current_step:
+        return
+    writeInLogFile(file, REPORT_STEP_SEPARATOR)
+    writeInLogFile(file, REPORT_STEP_NAMES[step])
+    report_current_step = step
+
+
+def write_test_event(file, line):
+    """Write one event, separating logical steps and removing relay repeats."""
+    global report_current_step
+    if not should_log_test_event(line):
+        return
+
+    step = report_step_for_event(line)
+    if step is not None:
+        begin_report_step(file, step)
+    writeInLogFile(file, line)
 
 def _sample_upload_worker():
     global _sfp_thread
@@ -199,6 +276,10 @@ def serialCom(announce_ready=False):
             received_data = common.ser.readline().decode('utf-8', errors='replace').strip()
             if received_data.startswith(("C_", "T_")):
                 status.record(received_data, "received")
+
+            command_step = REPORT_COMMAND_STEPS.get(received_data)
+            if command_step is not None and isFileOpen:
+                begin_report_step(fp, command_step)
             
             if received_data == "C_RDY":
                 service_ready = True
@@ -217,12 +298,12 @@ def serialCom(announce_ready=False):
                     setLogFileUid(fp, prog.read_stm32_uid())
                     assigned_serial = provision_dut_serial()
                     setLogFileSerial(fp, assigned_serial)
-                    writeInLogFile(fp, f"T_SERIAL_PRESENT {'YES' if test_serial_preexisting else 'NO'}")
+                    write_test_event(fp, f"T_SERIAL_PRESENT {'YES' if test_serial_preexisting else 'NO'}")
                     identity_ready = True
                 except Exception as error:
-                    writeInLogFile(fp, f"T_ID_TKO {error}")
+                    write_test_event(fp, f"T_ID_TKO {error}")
                     presence = "UNKNOWN" if test_serial_preexisting is None else ("YES" if test_serial_preexisting else "NO")
-                    writeInLogFile(fp, f"T_SERIAL_PRESENT {presence}")
+                    write_test_event(fp, f"T_SERIAL_PRESENT {presence}")
                     setLogFileSerial(fp, test_serial)
                     print(f"DUT identity provisioning failed: {error}")
                 finally:
@@ -311,10 +392,10 @@ def serialCom(announce_ready=False):
                     writeInLogFile(fp, "STM32_UID UNAVAILABLE")
                     writeInLogFile(fp, "SERIAL UNAVAILABLE")
                     writeInLogFile(fp, str(now))
-                    writeInLogFile(fp, received_data)
+                    write_test_event(fp, received_data)
                 elif(received_data == "T_STP"):
                     if isFileOpen:
-                        writeInLogFile(fp, received_data)
+                        write_test_event(fp, received_data)
                         # Older firmware and tests stopped before the explicit
                         # report-upload command. Preserve that fallback without
                         # uploading a completed report twice.
@@ -324,8 +405,7 @@ def serialCom(announce_ready=False):
                     else:
                         print("Ignoring T_STP: no test report is open")
                 else:
-                    if should_log_test_event(received_data):
-                        writeInLogFile(fp, received_data)
+                    write_test_event(fp, received_data)
             else:
                 print(f"received: `{received_data}`")
 
