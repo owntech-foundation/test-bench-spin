@@ -530,12 +530,41 @@ class RegressionTests(unittest.TestCase):
     def test_finished_report_is_uploaded_for_failed_or_successful_test(self):
         common.ser = FakeSerial([b"T_STP\r\n"])
         serial_com.isFileOpen = True
+        serial_com.test_serial = "SPN1234567890"
         report_file = mock.MagicMock()
         serial_com.fp = report_file
         with mock.patch.object(serial_com, "upload_current_report", return_value=True) as upload, \
              mock.patch.object(serial_com, "print"), \
              self.assertRaises(SystemExit):
             serial_com.serialCom()
+        upload.assert_called_once_with(report_file)
+
+    def test_failed_explicit_upload_is_retried_at_test_stop(self):
+        common.ser = FakeSerial([b"C_RUP\r\n", b"T_STP\r\n"])
+        serial_com.isFileOpen = True
+        serial_com.test_serial = "SPN1234567890"
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com, "upload_current_report", side_effect=[False, True]) as upload, \
+             mock.patch.object(serial_com.common, "send") as send, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
+        self.assertEqual(upload.call_args_list, [mock.call(report_file), mock.call(report_file)])
+        send.assert_called_once_with("R_RUP_TKO")
+
+    def test_identified_report_is_uploaded_on_unexpected_serial_exit(self):
+        common.ser = FakeSerial([])
+        serial_com.isFileOpen = True
+        serial_com.test_serial = "SPN1234567890"
+        report_file = mock.MagicMock()
+        serial_com.fp = report_file
+        with mock.patch.object(serial_com, "upload_current_report", return_value=True) as upload, \
+             mock.patch.object(serial_com, "print"), \
+             self.assertRaises(SystemExit):
+            serial_com.serialCom()
+
         upload.assert_called_once_with(report_file)
 
     def test_explicit_report_upload_responds_and_is_not_repeated_on_stop(self):

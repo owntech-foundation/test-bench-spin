@@ -262,10 +262,11 @@ def upload_current_report(file):
     if test_serial is None:
         print("Test report retained locally: no serial was assigned")
         return False
-    file.flush()
-    file.seek(0)
-    report = file.read()
-    file.seek(0, os.SEEK_END)
+    with _report_file_lock:
+        file.flush()
+        file.seek(0)
+        report = file.read()
+        file.seek(0, os.SEEK_END)
     try:
         production_client.upload_report(test_serial, report)
         print(f"Test report uploaded for {test_serial}")
@@ -273,6 +274,17 @@ def upload_current_report(file):
     except ProductionError as error:
         print(f"Test report retained locally: {error}")
         return False
+
+def finalize_current_report(file):
+    """Upload an assigned report once before closing it, whatever ended the test."""
+    global report_upload_requested, report_uploaded
+    if file is None or not isFileOpen:
+        return report_uploaded
+    if test_serial is not None and not report_uploaded:
+        report_upload_requested = True
+        report_uploaded = upload_current_report(file)
+    closeLogFile()
+    return report_uploaded
 
 def closeLogFile():
     global fp, isFileOpen
@@ -421,13 +433,15 @@ def serialCom(announce_ready=False):
 
             elif received_data.startswith("T_"):
                 if (received_data == "T_STR"):
+                    # If the controller unexpectedly starts another test,
+                    # finalize the previous identified report first.
+                    finalize_current_report(fp)
                     test_serial = None
                     test_serial_preexisting = None
                     report_upload_requested = False
                     report_uploaded = False
                     common.clear_controller_commands()
                     reset_report_relay_states()
-                    closeLogFile()
                     now = datetime.datetime.now()
                     os.makedirs('test_reports', exist_ok=True)
                     fp = open('test_reports/SPIN-TEST_' + str(now.isoformat()) + '.txt', 'w+')
@@ -439,12 +453,9 @@ def serialCom(announce_ready=False):
                 elif(received_data == "T_STP"):
                     if isFileOpen:
                         write_test_event(fp, received_data)
-                        # Older firmware and tests stopped before the explicit
-                        # report-upload command. Preserve that fallback without
-                        # uploading a completed report twice.
-                        if not report_upload_requested:
-                            report_uploaded = upload_current_report(fp)
-                        closeLogFile()
+                        # Upload any identified report that has not already
+                        # succeeded, including after a failed C_RUP attempt.
+                        finalize_current_report(fp)
                     else:
                         print("Ignoring T_STP: no test report is open")
                 else:
@@ -458,6 +469,8 @@ def serialCom(announce_ready=False):
     except serial.SerialException as e: #device disconnected
         print(f"Serial connection lost: {e}")
     finally:
-        closeLogFile()
+        # A controller reset, disconnect, service stop, or unexpected exception
+        # must not discard a report once the DUT has an assigned serial.
+        finalize_current_report(fp)
         if common.ser is not None and common.ser.is_open:
             common.ser.close()  # Close the serial port when done
