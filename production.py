@@ -61,13 +61,40 @@ class ProductionClient:
             raise ProductionError("Production API returned an invalid passphrase")
         return {"serial": serial, "passphrase": passphrase}
 
-    def generate_identity(self):
+    def list_product_versions(self):
         with self._lock:
             sdk = self._connected_sdk()
+            product_code = self._setting("OWNTECH_PRODUCT_TYPE", "SPN")
+            try:
+                response = sdk.list_product_versions(product_code=product_code)
+            except Exception as error:
+                raise ProductionError(f"Product-version lookup failed: {error}") from error
+            if response.get("status_code") != 200:
+                raise ProductionError(f"Product-version lookup returned HTTP {response.get('status_code')}")
+            content = response.get("content") or []
+            if isinstance(content, dict):
+                content = content.get("content") or content.get("items") or []
+            versions = []
+            for item in content:
+                version = str(item.get("version") or "").strip()
+                if version:
+                    versions.append({
+                        "id": item.get("id"),
+                        "version": version,
+                        "status": str(item.get("status") or "Undefined").strip(),
+                    })
+            return versions
+
+    def generate_identity(self, product_version=None):
+        with self._lock:
+            sdk = self._connected_sdk()
+            version = str(product_version or self._setting("OWNTECH_PRODUCT_VERSION", "1.2.1")).strip()
+            if not version:
+                raise ProductionError("Cannot generate a serial without a product version")
             try:
                 response = sdk.generate_serial(
                     self._setting("OWNTECH_PRODUCT_TYPE", "SPN"),
-                    self._setting("OWNTECH_PRODUCT_VERSION", "1.2.1"),
+                    version,
                 )
             except Exception as error:
                 raise ProductionError(f"Serial generation failed: {error}") from error
@@ -76,9 +103,9 @@ class ProductionClient:
             content = response.get("content") or {}
             return self._validated_identity(content)
 
-    def generate_serial(self):
+    def generate_serial(self, product_version=None):
         """Backward-compatible helper for callers that only need the serial."""
-        return self.generate_identity()["serial"]
+        return self.generate_identity(product_version)["serial"]
 
     def get_passphrase(self, serial):
         normalized_serial = str(serial or "").strip().upper()

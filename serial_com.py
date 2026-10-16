@@ -248,7 +248,7 @@ def provision_dut_serial():
             prog.write_otp_identity(existing_serial, passphrase, otp_data)
         return existing_serial
 
-    generated_identity = production_client.generate_identity()
+    generated_identity = production_client.generate_identity(status.get_selected_version())
     generated_serial = generated_identity["serial"]
     # Keep the API identity even if the irreversible OTP write fails, so the
     # provisioning failure report can still be uploaded against that serial.
@@ -325,6 +325,9 @@ def serialCom(announce_ready=False):
             
             if received_data == "C_RDY":
                 service_ready = True
+                # Wait for the controller's readiness acknowledgement before
+                # sending the longer version command through its small RX buffer.
+                common.send(f"R_VER {status.get_selected_version()}")
 
             elif received_data == "C_PRP":
                 write_report_result(fp, "pi", True)

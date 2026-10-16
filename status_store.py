@@ -1,4 +1,5 @@
 import datetime
+import os
 import threading
 from collections import deque
 
@@ -54,6 +55,20 @@ class TestStatus:
         self._failed_steps = set()
         self._measurements = {}
         self._relays = {"USB_PWR": False, "USB_DATA": False, "DUT": False}
+        self._selected_version = os.environ.get("OWNTECH_PRODUCT_VERSION", "1.2.1").strip() or "1.2.1"
+        self._selected_version_status = None
+        self._selected_version_id = None
+
+    def set_selected_version(self, version, production_status=None, version_id=None):
+        with self._lock:
+            self._selected_version = str(version).strip()
+            self._selected_version_status = production_status
+            self._selected_version_id = version_id
+            self._append_event(f"Selected SPIN V{self._selected_version}", "system")
+
+    def get_selected_version(self):
+        with self._lock:
+            return self._selected_version
 
     def set_controller(self, port):
         with self._lock:
@@ -209,6 +224,11 @@ class TestStatus:
                 "last_message": self._last_message,
                 "measurements": dict(self._measurements),
                 "diagnostics": {"relays": dict(self._relays)},
+                "selected_version": {
+                    "id": self._selected_version_id,
+                    "version": self._selected_version,
+                    "status": self._selected_version_status,
+                },
                 "steps": steps,
                 "operator_steps": list(OPERATOR_STEPS),
                 "events": list(self._events),

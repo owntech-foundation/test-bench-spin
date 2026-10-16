@@ -15,7 +15,7 @@ import main
 import prog
 import production
 import serial_com
-from status_store import TestStatus
+from status_store import TestStatus, status
 from web_server import start_server
 
 
@@ -318,9 +318,28 @@ class RegressionTests(unittest.TestCase):
         with mock.patch.object(client, "_connected_sdk", return_value=sdk), \
              mock.patch.object(client, "_setting", side_effect=lambda _name, default=None: default):
             self.assertEqual(
-                client.generate_identity(),
+                client.generate_identity("1.3.0"),
                 {"serial": "SPN1234567890", "passphrase": "Ab3dE6gH9k"},
             )
+        sdk.generate_serial.assert_called_once_with("SPN", "1.3.0")
+
+    def test_api_product_versions_include_production_status(self):
+        client = production.ProductionClient()
+        sdk = mock.Mock()
+        sdk.list_product_versions.return_value = {
+            "status_code": 200,
+            "content": [
+                {"id": 12, "version": "1.2.1", "status": "In Production"},
+                {"id": 9, "version": "1.1.0", "status": "NRFND"},
+            ],
+        }
+        with mock.patch.object(client, "_connected_sdk", return_value=sdk), \
+             mock.patch.object(client, "_setting", return_value="SPN"):
+            self.assertEqual(client.list_product_versions(), [
+                {"id": 12, "version": "1.2.1", "status": "In Production"},
+                {"id": 9, "version": "1.1.0", "status": "NRFND"},
+            ])
+        sdk.list_product_versions.assert_called_once_with(product_code="SPN")
 
     def test_api_passphrase_lookup_selects_exact_serial(self):
         client = production.ProductionClient()
@@ -379,7 +398,11 @@ class RegressionTests(unittest.TestCase):
              self.assertRaises(SystemExit):
             serial_com.serialCom(announce_ready=True)
 
-        self.assertEqual(send.call_args_list, [mock.call("R_RDY"), mock.call("R_RDY")])
+        self.assertEqual(send.call_args_list, [
+            mock.call("R_RDY"),
+            mock.call("R_RDY"),
+            mock.call(f"R_VER {status.get_selected_version()}"),
+        ])
 
     def test_stop_without_open_report_is_ignored(self):
         common.ser = FakeSerial([b"T_STP\r\n"])
@@ -496,7 +519,7 @@ class RegressionTests(unittest.TestCase):
              mock.patch.object(prog, "write_otp_identity", return_value={"serial": serial, "passphrase": passphrase}) as write:
             self.assertEqual(serial_com.provision_dut_serial(), serial)
         self.assertFalse(serial_com.test_serial_preexisting)
-        generate.assert_called_once_with()
+        generate.assert_called_once_with(status.get_selected_version())
         write.assert_called_once_with(serial, passphrase, otp_data)
 
     def test_otp_write_is_enabled_then_read_back_for_verification(self):
@@ -620,6 +643,33 @@ class RegressionTests(unittest.TestCase):
             self.assertEqual(connection.getresponse().status, 200)
             connection.close()
         finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_web_version_selection_updates_status_and_controller(self):
+        versions = [
+            {"id": 12, "version": "1.2.1", "status": "In Production"},
+            {"id": 13, "version": "1.3.0", "status": "In development"},
+        ]
+        server = start_server("127.0.0.1", 0)
+        self.assertIsNotNone(server)
+        try:
+            status.set_controller("/dev/ttyACM0")
+            with mock.patch("web_server.production_client.list_product_versions", return_value=versions), \
+                 mock.patch.object(common, "request_controller_command", return_value=True) as request_command:
+                request = urllib.request.Request(
+                    f"http://127.0.0.1:{server.server_port}/api/product-version",
+                    data=json.dumps({"version": "1.3.0"}).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                with urllib.request.urlopen(request) as response:
+                    payload = json.load(response)
+            self.assertEqual(payload["selected"]["status"], "In development")
+            self.assertEqual(status.get_selected_version(), "1.3.0")
+            request_command.assert_called_once_with("R_VER 1.3.0")
+        finally:
+            status.set_controller(None)
             server.shutdown()
             server.server_close()
 

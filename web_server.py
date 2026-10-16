@@ -4,6 +4,7 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import common
+from production import ProductionError, production_client
 from status_store import status
 
 
@@ -28,7 +29,7 @@ PAGE = r"""<!doctype html>
     .dot.ok { background:var(--green); }
     .grid { display:grid; grid-template-columns:minmax(0,1.7fr) minmax(280px,.8fr); gap:18px; }
     .panel { background:var(--panel); border:1px solid var(--line); border-radius:2px; padding:18px; }
-    .summary { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:18px; }
+    .summary { display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:18px; }
     .metric { min-height:100px; }
     .label { color:var(--muted); font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
     .value { margin-top:7px; font-size:20px; font-weight:700; overflow-wrap:anywhere; }
@@ -59,8 +60,10 @@ PAGE = r"""<!doctype html>
     .diagnostics { display:grid; gap:8px; }
     .relay-row { display:flex; align-items:center; justify-content:space-between; gap:8px; border-top:1px solid var(--line); padding-top:8px; }
     .relay-actions { display:flex; gap:6px; }
-    button { border:1px solid var(--line); border-radius:1px; background:#20272c; color:var(--text); padding:6px 9px; cursor:pointer; }
+    button,select { border:1px solid var(--line); border-radius:1px; background:#20272c; color:var(--text); padding:6px 9px; }
+    button { cursor:pointer; }
     button:hover { border-color:var(--cyan); color:var(--cyan); }
+    select { width:100%; margin-top:7px; font-size:15px; }
     @media (max-width:800px) { .grid,.summary { grid-template-columns:1fr; } header { align-items:flex-end; } .event { grid-template-columns:64px 1fr; } .event .direction { display:none; } }
   </style>
 </head>
@@ -71,6 +74,7 @@ PAGE = r"""<!doctype html>
   <section class="summary">
     <div class="panel metric"><div class="label">Controller</div><div id="controller" class="value">—</div><div id="controller-port" class="sub">—</div></div>
     <div class="panel metric"><div class="label">Test state</div><div class="value"><span id="test-state" class="badge">—</span></div><div id="current-step" class="sub">—</div></div>
+    <div class="panel metric"><div class="label">SPIN version</div><select id="spin-version" aria-label="SPIN version"><option>Loading…</option></select><div id="version-status" class="sub">Loading production versions…</div></div>
     <div class="panel metric"><div class="label">Last message</div><div id="last-message" class="value">—</div><div id="last-event" class="sub">—</div></div>
   </section>
   <div class="grid">
@@ -94,6 +98,7 @@ PAGE = r"""<!doctype html>
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));
 const timeOnly = value => value ? new Date(value).toLocaleTimeString() : 'No activity yet';
+let versionsLoaded = false;
 
 function render(data) {
   $('error').style.display = 'none';
@@ -103,6 +108,9 @@ function render(data) {
   $('controller-port').textContent = data.controller.port || 'Waiting for SPIN-TESTER';
   $('test-state').textContent = data.test.state;
   $('test-state').className = `badge ${data.test.state}`;
+  const selectedVersion = data.selected_version || {};
+  if (!$('spin-version').matches(':focus') && selectedVersion.version) $('spin-version').value = selectedVersion.version;
+  $('version-status').textContent = selectedVersion.status || 'Selected for the next test';
   const active = data.steps.find(step => step.state === 'active' || step.state === 'failed');
   $('current-step').textContent = active ? active.title : 'Waiting for a test';
   $('last-message').textContent = data.last_message || '—';
@@ -118,6 +126,41 @@ function render(data) {
     button.disabled = Boolean(relays[relay]) === (button.dataset.enabled === 'true');
   });
 }
+
+async function loadVersions() {
+  const selector = $('spin-version');
+  try {
+    const response = await fetch('/api/product-versions', {cache:'no-store'});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || response.status);
+    selector.innerHTML = payload.versions.map(item => `<option value="${escapeHtml(item.version)}">${escapeHtml(item.version)} — ${escapeHtml(item.status)}</option>`).join('');
+    selector.value = payload.selected.version;
+    $('version-status').textContent = payload.selected.status || 'Selected for the next test';
+    versionsLoaded = true;
+  } catch (error) {
+    selector.innerHTML = '<option value="">Unavailable</option>';
+    selector.disabled = true;
+    $('version-status').textContent = `Version API unavailable: ${error.message}`;
+  }
+}
+
+$('spin-version').addEventListener('change', async event => {
+  if (!versionsLoaded) return;
+  const selector = event.target;
+  selector.disabled = true;
+  $('version-status').textContent = 'Updating tester…';
+  try {
+    const response = await fetch('/api/product-version', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({version:selector.value})});
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || response.status);
+    $('version-status').textContent = payload.selected.status || 'Selected for the next test';
+  } catch (error) {
+    $('version-status').textContent = `Selection failed: ${error.message}`;
+    await loadVersions();
+  } finally {
+    selector.disabled = false;
+  }
+});
 
 document.querySelectorAll('[data-relay]').forEach(button => button.addEventListener('click', async () => {
   const result = $('diagnostic-result');
@@ -165,7 +208,7 @@ async function refresh() {
     $('updated').textContent = 'Offline';
   }
 }
-refresh(); setInterval(refresh, 1000);
+loadVersions(); refresh(); setInterval(refresh, 1000);
 </script>
 </body>
 </html>"""
@@ -178,6 +221,19 @@ class StatusHandler(BaseHTTPRequestHandler):
         elif self.path == "/api/status":
             payload = json.dumps(status.snapshot(), separators=(",", ":")).encode("utf-8")
             self._send(payload, "application/json")
+        elif self.path == "/api/product-versions":
+            try:
+                versions = production_client.list_product_versions()
+                selected_version = status.get_selected_version()
+                selected = next((item for item in versions if item["version"] == selected_version), {
+                    "id": None, "version": selected_version, "status": None,
+                })
+                if selected["id"] is not None:
+                    status.set_selected_version(selected["version"], selected["status"], selected["id"])
+                payload = json.dumps({"versions": versions, "selected": selected}).encode("utf-8")
+                self._send(payload, "application/json")
+            except ProductionError as error:
+                self._send(json.dumps({"error": str(error)}).encode("utf-8"), "application/json", 502)
         elif self.path == "/healthz":
             self._send(b'{"status":"ok"}', "application/json")
         else:
@@ -190,6 +246,34 @@ class StatusHandler(BaseHTTPRequestHandler):
             self._send(b'{"error":"not found"}', "application/json", 404, include_body=False)
 
     def do_POST(self):
+        if self.path == "/api/product-version":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                payload = json.loads(self.rfile.read(length) or b"{}")
+                requested = str(payload.get("version") or "").strip()
+                if not requested:
+                    raise ValueError("version is required")
+                test_state = status.snapshot()["test"]
+                if test_state["state"] in ("running", "failed") and test_state["finished_at"] is None:
+                    self._send(b'{"error":"cannot change version during a test"}', "application/json", 409)
+                    return
+                versions = production_client.list_product_versions()
+                selected = next((item for item in versions if item["version"] == requested), None)
+                if selected is None:
+                    self._send(b'{"error":"version is not available for SPIN"}', "application/json", 400)
+                    return
+                if status.snapshot()["controller"]["connected"]:
+                    if not common.request_controller_command(f"R_VER {requested}"):
+                        self._send(b'{"error":"controller command queue is busy"}', "application/json", 429)
+                        return
+                status.set_selected_version(selected["version"], selected["status"], selected["id"])
+                self._send(json.dumps({"selected": selected}).encode("utf-8"), "application/json", 202)
+            except (ValueError, json.JSONDecodeError) as error:
+                self._send(json.dumps({"error": str(error)}).encode("utf-8"), "application/json", 400)
+            except ProductionError as error:
+                self._send(json.dumps({"error": str(error)}).encode("utf-8"), "application/json", 502)
+            return
+
         if self.path in ("/api/diagnostics/relay", "/api/diagnostics/voltage"):
             if not status.snapshot()["controller"]["connected"]:
                 self._send(b'{"error":"controller is not connected"}', "application/json", 409)
