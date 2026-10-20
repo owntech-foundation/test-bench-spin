@@ -38,24 +38,28 @@ def _status():
     return _request("/api/status")
 
 
-def _set_dut_power(enabled):
-    response = _request(
-        "/api/diagnostics/relay",
-        method="POST",
-        payload={"relay": "DUT", "enabled": enabled},
-    )
-    if response.get("status") != "accepted":
-        raise OtpCheckError("The tester did not accept the DUT relay command")
+USB_RELAYS = ("USB_DATA", "USB_PWR")
 
 
-def _wait_for_dut_power(enabled, timeout=5):
+def _set_usb_relays(enabled):
+    for relay in USB_RELAYS:
+        response = _request(
+            "/api/diagnostics/relay",
+            method="POST",
+            payload={"relay": relay, "enabled": enabled},
+        )
+        if response.get("status") != "accepted":
+            raise OtpCheckError(f"The tester did not accept the {relay} relay command")
+
+
+def _wait_for_usb_relays(enabled, timeout=5):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         relays = (_status().get("diagnostics") or {}).get("relays") or {}
-        if bool(relays.get("DUT")) is enabled:
+        if all(bool(relays.get(relay)) is enabled for relay in USB_RELAYS):
             return
         time.sleep(0.1)
-    raise OtpCheckError(f"DUT relay did not turn {'on' if enabled else 'off'}")
+    raise OtpCheckError(f"USB relays did not turn {'on' if enabled else 'off'}")
 
 
 def read_fitted_spin_identity():
@@ -66,19 +70,19 @@ def read_fitted_spin_identity():
     if test.get("state") in ("running", "failed") and not test.get("finished_at"):
         raise OtpCheckError("A test is active; finish or stop it before reading OTP")
 
-    power_requested = False
+    usb_relays_requested = False
     try:
-        _set_dut_power(True)
-        power_requested = True
-        _wait_for_dut_power(True)
+        usb_relays_requested = True
+        _set_usb_relays(True)
+        _wait_for_usb_relays(True)
         time.sleep(0.5)
         uid = prog.read_stm32_uid()
         identity = prog.find_otp_identity(prog.read_stm32_otp())
     finally:
-        if power_requested:
+        if usb_relays_requested:
             try:
-                _set_dut_power(False)
-                _wait_for_dut_power(False)
+                _set_usb_relays(False)
+                _wait_for_usb_relays(False)
             except OtpCheckError as error:
                 print(f"WARNING: {error}", file=sys.stderr)
 
