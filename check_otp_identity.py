@@ -39,6 +39,7 @@ def _status():
 
 
 USB_RELAYS = ("USB_DATA", "USB_PWR")
+USB_STARTUP_DELAY_SECONDS = 2.0
 
 
 def _set_usb_relays(enabled):
@@ -75,7 +76,9 @@ def read_fitted_spin_identity():
         usb_relays_requested = True
         _set_usb_relays(True)
         _wait_for_usb_relays(True)
-        time.sleep(0.5)
+        # Give the DUT's USB interface and ST-LINK time to enumerate after
+        # VBUS and D+/D- are restored before invoking st-flash.
+        time.sleep(USB_STARTUP_DELAY_SECONDS)
         uid = prog.read_stm32_uid()
         identity = prog.find_otp_identity(prog.read_stm32_otp())
     finally:
